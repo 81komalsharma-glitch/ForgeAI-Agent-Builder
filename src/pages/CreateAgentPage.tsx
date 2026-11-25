@@ -1,12 +1,12 @@
 import { useRef, useState } from 'react';
 import {
   AlertCircle,
-  AlertTriangle,
   CheckCircle2,
   Download,
   Eye,
   FileSpreadsheet,
   FileText,
+  Loader2,
   Trash2,
   Upload,
   UploadCloud,
@@ -16,8 +16,13 @@ import {
   deleteProjectDocument,
   fetchDocumentExtractedText,
   uploadProjectDocuments,
+  type UploadLifecycleStage,
 } from '../services/api';
 import type { AgentProject, NavSectionId, StoredDocument } from '../types/agent';
+import {
+  MAX_FILES_PER_PROJECT,
+  validateCandidateFiles,
+} from '../utils/fileValidation';
 import { formatBytes } from '../utils/format';
 
 const DOMAIN_OPTIONS = [
@@ -28,10 +33,6 @@ const DOMAIN_OPTIONS = [
   'Legal & Compliance',
   'General',
 ];
-
-const ALLOWED_EXTENSIONS = ['.pdf', '.txt', '.csv'];
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
-const MAX_FILES = 10;
 
 const SAMPLE_BRIEF = {
   name: 'Campus Admissions & Scholarship Advisor',
@@ -58,10 +59,17 @@ export function CreateAgentPage({
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadStage, setUploadStage] = useState<{
+    stage: UploadLifecycleStage;
+    progressPercent: number;
+  } | null>(null);
   const [createdProject, setCreatedProject] = useState<AgentProject | null>(null);
 
   const [docActionError, setDocActionError] = useState<string | null>(null);
-  const [uploadingMore, setUploadingMore] = useState(false);
+  const [uploadingMoreStage, setUploadingMoreStage] = useState<{
+    stage: UploadLifecycleStage;
+    progressPercent: number;
+  } | null>(null);
   const [removingDocId, setRemovingDocId] = useState<string | null>(null);
   const [loadingTextDocId, setLoadingTextDocId] = useState<string | null>(null);
   const [inspectedDoc, setInspectedDoc] = useState<{
@@ -72,45 +80,15 @@ export function CreateAgentPage({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const addValidatedFiles = (incoming: FileList | File[]) => {
-    const incomingArray = Array.from(incoming);
-    const validationErrors: string[] = [];
-    const nextFiles = [...files];
-
-    for (const file of incomingArray) {
-      const lower = file.name.toLowerCase();
-      const hasValidExt = ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext));
-
-      if (!hasValidExt) {
-        validationErrors.push(
-          `"${file.name}" skipped: only PDF, TXT, and CSV files are supported.`
-        );
-        continue;
-      }
-
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        validationErrors.push(
-          `"${file.name}" skipped: file exceeds the 10 MB limit.`
-        );
-        continue;
-      }
-
-      const duplicate = nextFiles.some(
-        (existing) => existing.name === file.name && existing.size === file.size
-      );
-      if (duplicate) {
-        continue;
-      }
-
-      if (nextFiles.length >= MAX_FILES) {
-        validationErrors.push(`Maximum of ${MAX_FILES} files per project reached.`);
-        break;
-      }
-
-      nextFiles.push(file);
+    const { accepted, errors } = validateCandidateFiles(
+      incoming,
+      files,
+      MAX_FILES_PER_PROJECT
+    );
+    if (accepted.length > 0) {
+      setFiles((prev) => [...prev, ...accepted]);
     }
-
-    setFiles(nextFiles);
-    setError(validationErrors.length > 0 ? validationErrors.join(' ') : null);
+    setError(errors.length > 0 ? errors.join(' ') : null);
   };
 
   const handleFileInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -148,6 +126,7 @@ export function CreateAgentPage({
     setDocActionError(null);
     setInspectedDoc(null);
     setCreatedProject(null);
+    setUploadStage(null);
   };
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -172,13 +151,19 @@ export function CreateAgentPage({
     }
 
     setSubmitting(true);
+    setUploadStage({ stage: 'uploading', progressPercent: 0 });
     try {
-      const project = await createAgentProject({
-        name: trimmedName,
-        domain,
-        brief: trimmedBrief,
-        files,
-      });
+      const project = await createAgentProject(
+        {
+          name: trimmedName,
+          domain,
+          brief: trimmedBrief,
+          files,
+        },
+        (stage, pct = 0) => {
+          setUploadStage({ stage, progressPercent: pct });
+        }
+      );
       setCreatedProject(project);
       setFiles([]);
       onProjectCreated(project);
@@ -186,6 +171,7 @@ export function CreateAgentPage({
       setError(err instanceof Error ? err.message : 'Failed to create agent project.');
     } finally {
       setSubmitting(false);
+      setUploadStage(null);
     }
   };
 
@@ -199,31 +185,33 @@ export function CreateAgentPage({
     event.target.value = '';
     setDocActionError(null);
 
-    for (const file of incoming) {
-      const lower = file.name.toLowerCase();
-      if (!ALLOWED_EXTENSIONS.some((ext) => lower.endsWith(ext))) {
-        setDocActionError(
-          `Unsupported file "${file.name}". Only PDF, TXT, and CSV files are accepted.`
-        );
-        return;
-      }
-      if (file.size > MAX_FILE_SIZE_BYTES) {
-        setDocActionError(`"${file.name}" exceeds the 10 MB maximum file size.`);
-        return;
-      }
-    }
+    const existingForCheck = createdProject.documents.map((doc) => ({
+      name: doc.originalName,
+    }));
+    const { accepted, errors } = validateCandidateFiles(
+      incoming,
+      existingForCheck,
+      MAX_FILES_PER_PROJECT
+    );
 
-    if (createdProject.documents.length + incoming.length > MAX_FILES) {
-      const remaining = Math.max(0, MAX_FILES - createdProject.documents.length);
-      setDocActionError(
-        `Maximum ${MAX_FILES} files per project (${remaining} slots remaining).`
-      );
+    if (errors.length > 0) {
+      setDocActionError(errors.join(' '));
       return;
     }
 
-    setUploadingMore(true);
+    if (accepted.length === 0) {
+      return;
+    }
+
+    setUploadingMoreStage({ stage: 'uploading', progressPercent: 0 });
     try {
-      const updated = await uploadProjectDocuments(createdProject.id, incoming);
+      const updated = await uploadProjectDocuments(
+        createdProject.id,
+        accepted,
+        (stage, pct = 0) => {
+          setUploadingMoreStage({ stage, progressPercent: pct });
+        }
+      );
       setCreatedProject(updated);
       onProjectsChanged();
     } catch (err) {
@@ -231,7 +219,7 @@ export function CreateAgentPage({
         err instanceof Error ? err.message : 'Failed to upload additional documents.'
       );
     } finally {
-      setUploadingMore(false);
+      setUploadingMoreStage(null);
     }
   };
 
@@ -282,24 +270,24 @@ export function CreateAgentPage({
       return (
         <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700">
           <CheckCircle2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-          <span>Processed</span>
-        </span>
-      );
-    }
-    if (doc.parseStatus === 'empty') {
-      return (
-        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700">
-          <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-          <span>No Readable Text</span>
+          <span>Successfully processed</span>
         </span>
       );
     }
     return (
       <span className="inline-flex items-center gap-1 text-xs font-medium text-red-700">
         <AlertCircle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-        <span>Extraction Failed</span>
+        <span>Failed</span>
       </span>
     );
+  };
+
+  const renderQueuedStatusLabel = () => {
+    if (!submitting || !uploadStage) return 'Ready to upload';
+    if (uploadStage.stage === 'uploading') {
+      return `Uploading (${uploadStage.progressPercent}%)`;
+    }
+    return 'Processing';
   };
 
   return (
@@ -441,7 +429,8 @@ export function CreateAgentPage({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                className="mt-3 px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                disabled={submitting}
+                className="mt-3 px-3.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
               >
                 Browse Files
               </button>
@@ -482,12 +471,13 @@ export function CreateAgentPage({
                       </div>
                       <div className="flex items-center gap-3 shrink-0">
                         <span className="text-xs font-mono tabular-nums text-slate-500">
-                          {formatBytes(file.size)} · Queued
+                          {formatBytes(file.size)} · {renderQueuedStatusLabel()}
                         </span>
                         <button
                           type="button"
                           onClick={() => removeFileAt(idx)}
-                          className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50"
+                          disabled={submitting}
+                          className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 disabled:opacity-40"
                           aria-label={`Remove ${file.name}`}
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -500,21 +490,41 @@ export function CreateAgentPage({
             )}
           </div>
 
-          <div className="pt-2 flex flex-wrap items-center justify-end gap-3 border-t border-slate-100">
-            <button
-              type="button"
-              onClick={handleReset}
-              className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
-            >
-              Clear Form
-            </button>
-            <button
-              type="submit"
-              disabled={submitting}
-              className="px-5 py-2 rounded-lg bg-[#1E3A8A] text-white text-sm font-medium hover:bg-[#1E40AF] disabled:opacity-50 transition-colors"
-            >
-              {submitting ? 'Saving & Processing...' : 'Save Project'}
-            </button>
+          <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100">
+            <div className="text-xs text-slate-600 tabular-nums">
+              {submitting && uploadStage && (
+                <span className="inline-flex items-center gap-1.5 font-medium text-[#1E3A8A]">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                  <span>
+                    {uploadStage.stage === 'uploading'
+                      ? `Uploading (${uploadStage.progressPercent}%)...`
+                      : 'Processing documents on server...'}
+                  </span>
+                </span>
+              )}
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={handleReset}
+                disabled={submitting}
+                className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors disabled:opacity-50"
+              >
+                Clear Form
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-5 py-2 rounded-lg bg-[#1E3A8A] text-white text-sm font-medium hover:bg-[#1E40AF] disabled:opacity-50 transition-colors"
+              >
+                {submitting
+                  ? uploadStage?.stage === 'uploading'
+                    ? 'Uploading...'
+                    : 'Processing...'
+                  : 'Save Project'}
+              </button>
+            </div>
           </div>
         </form>
 
@@ -532,7 +542,7 @@ export function CreateAgentPage({
                     Project Saved
                   </h2>
                   <p className="text-xs text-slate-600 mt-0.5">
-                    Associated documents have been processed and stored with this project.
+                    Documents are stored and linked to this project.
                   </p>
                 </div>
               </div>
@@ -568,19 +578,26 @@ export function CreateAgentPage({
               <div>
                 <div className="flex items-center justify-between gap-2 mb-2.5">
                   <h3 className="text-xs font-semibold text-slate-800 tabular-nums">
-                    Uploaded Documents ({createdProject.documents.length} / {MAX_FILES})
+                    Uploaded Documents ({createdProject.documents.length} /{' '}
+                    {MAX_FILES_PER_PROJECT})
                   </h3>
 
-                  {createdProject.documents.length < MAX_FILES && (
+                  {createdProject.documents.length < MAX_FILES_PER_PROJECT && (
                     <label className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer">
                       <Upload className="w-3 h-3" aria-hidden="true" />
-                      <span>{uploadingMore ? 'Uploading...' : 'Add Files'}</span>
+                      <span>
+                        {uploadingMoreStage
+                          ? uploadingMoreStage.stage === 'uploading'
+                            ? `Uploading (${uploadingMoreStage.progressPercent}%)`
+                            : 'Processing...'
+                          : 'Add Files'}
+                      </span>
                       <input
                         type="file"
                         multiple
                         accept=".pdf,.txt,.csv"
                         onChange={handleUploadMoreToProject}
-                        disabled={uploadingMore}
+                        disabled={Boolean(uploadingMoreStage)}
                         className="sr-only"
                       />
                     </label>
@@ -592,7 +609,7 @@ export function CreateAgentPage({
                     No documents uploaded with this project.
                   </p>
                 ) : (
-                  <ul className="space-y-2.5">
+                  <ul className="space-y-3">
                     {createdProject.documents.map((doc) => (
                       <li
                         key={doc.id}
@@ -607,18 +624,18 @@ export function CreateAgentPage({
                               {doc.fileType.toUpperCase()} · {formatBytes(doc.sizeBytes)}
                             </p>
                           </div>
-                          <div className="flex items-center gap-1.5 shrink-0">
+                          <div className="shrink-0">
                             {renderStatusIndicator(doc)}
                           </div>
                         </div>
 
                         {doc.parseStatus === 'parsed' ? (
-                          <div className="text-slate-600 tabular-nums space-y-1">
+                          <div className="text-slate-600 tabular-nums space-y-1.5">
                             {doc.fileType === 'csv' ? (
                               <>
                                 <p>
-                                  {doc.csvRowCount ?? 0} rows · {doc.csvHeaders?.length ?? 0}{' '}
-                                  columns
+                                  {doc.csvRowCount ?? 0} rows ·{' '}
+                                  {doc.csvHeaders?.length ?? 0} columns
                                 </p>
                                 {doc.csvHeaders && doc.csvHeaders.length > 0 && (
                                   <p className="text-slate-500 break-words">
@@ -637,16 +654,16 @@ export function CreateAgentPage({
                                 {doc.lineCount.toLocaleString()} lines
                               </p>
                             )}
+
+                            {doc.previewText && (
+                              <div className="rounded-md border border-slate-200 bg-slate-50 p-2 font-mono text-[11px] text-slate-700 whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
+                                {doc.previewText}
+                              </div>
+                            )}
                           </div>
                         ) : (
-                          <p
-                            className={
-                              doc.parseStatus === 'error'
-                                ? 'text-red-700'
-                                : 'text-amber-700'
-                            }
-                          >
-                            {doc.parseNote ?? 'Document could not be read.'}
+                          <p className="text-red-700 bg-red-50 border border-red-200 rounded-md p-2">
+                            {doc.parseNote ?? 'Document extraction failed.'}
                           </p>
                         )}
 
@@ -662,8 +679,8 @@ export function CreateAgentPage({
                               {loadingTextDocId === doc.id
                                 ? 'Loading...'
                                 : inspectedDoc?.doc.id === doc.id
-                                  ? 'Hide Text'
-                                  : 'View Extracted Text'}
+                                  ? 'Hide Full Text'
+                                  : 'View Full Text'}
                             </span>
                           </button>
 
@@ -689,7 +706,7 @@ export function CreateAgentPage({
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-semibold text-slate-800 truncate">
-                      Extracted Text: {inspectedDoc.doc.originalName}
+                      Full Extracted Text: {inspectedDoc.doc.originalName}
                     </span>
                     <button
                       type="button"

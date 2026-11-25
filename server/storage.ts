@@ -195,29 +195,36 @@ export async function createProject(input: {
   const projectId = crypto.randomUUID();
 
   const storedDocuments: StoredDocument[] = [];
-  for (const file of input.files) {
-    const stored = await persistDocument(projectId, file);
-    storedDocuments.push(stored);
+  try {
+    for (const file of input.files) {
+      const stored = await persistDocument(projectId, file);
+      storedDocuments.push(stored);
+    }
+
+    const project: AgentProject = {
+      id: projectId,
+      name: input.name,
+      domain: input.domain,
+      brief: input.brief,
+      stage: 'brief_submitted',
+      createdAt: now,
+      updatedAt: now,
+      documents: storedDocuments,
+      requirements: null,
+      agentConfig: null,
+      evaluation: null,
+      optimization: null,
+      report: null,
+    };
+
+    await saveProjectRecord(project);
+    return project;
+  } catch (error) {
+    for (const doc of storedDocuments) {
+      await cleanupDocumentFiles(doc);
+    }
+    throw error;
   }
-
-  const project: AgentProject = {
-    id: projectId,
-    name: input.name,
-    domain: input.domain,
-    brief: input.brief,
-    stage: 'brief_submitted',
-    createdAt: now,
-    updatedAt: now,
-    documents: storedDocuments,
-    requirements: null,
-    agentConfig: null,
-    evaluation: null,
-    optimization: null,
-    report: null,
-  };
-
-  await saveProjectRecord(project);
-  return project;
 }
 
 export async function addDocumentsToProject(
@@ -236,13 +243,22 @@ export async function addDocumentsToProject(
     );
   }
 
-  for (const file of files) {
-    const stored = await persistDocument(project.id, file);
-    project.documents.push(stored);
+  const newlyStored: StoredDocument[] = [];
+  try {
+    for (const file of files) {
+      const stored = await persistDocument(project.id, file);
+      newlyStored.push(stored);
+    }
+    project.documents.push(...newlyStored);
+    project.updatedAt = new Date().toISOString();
+    await saveProjectRecord(project);
+    return project;
+  } catch (error) {
+    for (const doc of newlyStored) {
+      await cleanupDocumentFiles(doc);
+    }
+    throw error;
   }
-  project.updatedAt = new Date().toISOString();
-  await saveProjectRecord(project);
-  return project;
 }
 
 export async function removeDocumentFromProject(
@@ -306,4 +322,35 @@ export async function getExtractedDocumentText(docId: string): Promise<string | 
     }
     throw error;
   }
+}
+
+export async function getProjectExtractedDocuments(
+  projectId: string
+): Promise<StoredExtractedDocument[]> {
+  const project = await getProjectById(projectId);
+  if (!project) {
+    return [];
+  }
+
+  const records: StoredExtractedDocument[] = [];
+  for (const doc of project.documents) {
+    if (doc.projectId !== project.id || doc.parseStatus !== 'parsed') {
+      continue;
+    }
+    const text = await getExtractedDocumentText(doc.id);
+    if (text && text.trim().length > 0) {
+      records.push({
+        documentId: doc.id,
+        projectId: project.id,
+        documentName: doc.originalName,
+        fileType: doc.fileType,
+        sizeBytes: doc.sizeBytes,
+        parseStatus: doc.parseStatus,
+        csvHeaders: doc.csvHeaders,
+        csvRowCount: doc.csvRowCount,
+        extractedText: text,
+      });
+    }
+  }
+  return records;
 }

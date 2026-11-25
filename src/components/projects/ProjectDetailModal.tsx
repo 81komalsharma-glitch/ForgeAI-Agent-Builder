@@ -13,8 +13,13 @@ import {
   fetchDocumentExtractedText,
   fetchProjectById,
   uploadProjectDocuments,
+  type UploadLifecycleStage,
 } from '../../services/api';
 import type { AgentProject, StoredDocument } from '../../types/agent';
+import {
+  MAX_FILES_PER_PROJECT,
+  validateCandidateFiles,
+} from '../../utils/fileValidation';
 import { formatBytes, formatDateTime, formatStageLabel } from '../../utils/format';
 
 interface ProjectDetailModalProps {
@@ -31,7 +36,10 @@ export function ProjectDetailModal({
   const [project, setProject] = useState<AgentProject | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
+  const [uploadStage, setUploadStage] = useState<{
+    stage: UploadLifecycleStage;
+    progressPercent: number;
+  } | null>(null);
   const [previewDoc, setPreviewDoc] = useState<{
     doc: StoredDocument;
     text: string;
@@ -66,21 +74,38 @@ export function ProjectDetailModal({
 
   const handleAddFiles = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = event.target.files;
-    if (!fileList || fileList.length === 0) return;
+    if (!fileList || fileList.length === 0 || !project) return;
 
-    const files = Array.from(fileList);
+    const incoming = Array.from(fileList);
     event.target.value = '';
-    setUploading(true);
     setError(null);
 
+    const { accepted, errors } = validateCandidateFiles(
+      incoming,
+      project.documents.map((d) => ({ name: d.originalName })),
+      MAX_FILES_PER_PROJECT
+    );
+    if (errors.length > 0) {
+      setError(errors.join(' '));
+      return;
+    }
+    if (accepted.length === 0) return;
+
+    setUploadStage({ stage: 'uploading', progressPercent: 0 });
     try {
-      const updated = await uploadProjectDocuments(projectId, files);
+      const updated = await uploadProjectDocuments(
+        projectId,
+        accepted,
+        (stage, pct = 0) => {
+          setUploadStage({ stage, progressPercent: pct });
+        }
+      );
       setProject(updated);
       onProjectUpdated();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload documents.');
     } finally {
-      setUploading(false);
+      setUploadStage(null);
     }
   };
 
@@ -201,16 +226,22 @@ export function ProjectDetailModal({
                     </p>
                   </div>
 
-                  {project.documents.length < 10 && (
+                  {project.documents.length < MAX_FILES_PER_PROJECT && (
                     <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#1E3A8A] text-white text-xs font-medium hover:bg-[#1E40AF] cursor-pointer transition-colors">
                       <Upload className="w-3.5 h-3.5" aria-hidden="true" />
-                      <span>{uploading ? 'Uploading...' : 'Add Documents'}</span>
+                      <span>
+                        {uploadStage
+                          ? uploadStage.stage === 'uploading'
+                            ? `Uploading (${uploadStage.progressPercent}%)`
+                            : 'Processing...'
+                          : 'Add Documents'}
+                      </span>
                       <input
                         type="file"
                         multiple
                         accept=".pdf,.txt,.csv"
                         onChange={handleAddFiles}
-                        disabled={uploading}
+                        disabled={Boolean(uploadStage)}
                         className="sr-only"
                       />
                     </label>
@@ -251,28 +282,33 @@ export function ProjectDetailModal({
                               {formatBytes(doc.sizeBytes)}
                             </td>
                             <td className="py-2.5 px-4 text-xs text-slate-600 tabular-nums">
-                              {doc.parseStatus === 'error' ? (
+                              {doc.parseStatus !== 'parsed' ? (
                                 <span className="text-red-700 font-medium">
-                                  Failed: {doc.parseNote ?? 'Extraction error'}
-                                </span>
-                              ) : doc.parseStatus === 'empty' ? (
-                                <span className="text-amber-700 font-medium">
-                                  Empty: {doc.parseNote ?? 'No readable text'}
+                                  Failed: {doc.parseNote ?? 'Document extraction failed.'}
                                 </span>
                               ) : doc.fileType === 'csv' ? (
                                 <span>
-                                  <span className="text-emerald-700 font-medium">Processed</span> ·{' '}
-                                  {doc.csvRowCount ?? 0} rows ({doc.csvHeaders?.join(', ') || 'no headers'})
+                                  <span className="text-emerald-700 font-medium">
+                                    Successfully processed
+                                  </span>{' '}
+                                  · {doc.csvRowCount ?? 0} rows (
+                                  {doc.csvHeaders?.join(', ') || 'no headers'})
                                 </span>
                               ) : doc.fileType === 'pdf' ? (
                                 <span>
-                                  <span className="text-emerald-700 font-medium">Processed</span> ·{' '}
-                                  {doc.pageCount ?? 0} pages · {doc.charCount.toLocaleString()} chars
+                                  <span className="text-emerald-700 font-medium">
+                                    Successfully processed
+                                  </span>{' '}
+                                  · {doc.pageCount ?? 0} pages ·{' '}
+                                  {doc.charCount.toLocaleString()} chars
                                 </span>
                               ) : (
                                 <span>
-                                  <span className="text-emerald-700 font-medium">Processed</span> ·{' '}
-                                  {doc.lineCount.toLocaleString()} lines · {doc.charCount.toLocaleString()} chars
+                                  <span className="text-emerald-700 font-medium">
+                                    Successfully processed
+                                  </span>{' '}
+                                  · {doc.lineCount.toLocaleString()} lines ·{' '}
+                                  {doc.charCount.toLocaleString()} chars
                                 </span>
                               )}
                             </td>

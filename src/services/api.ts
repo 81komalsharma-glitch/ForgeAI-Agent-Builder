@@ -1,5 +1,11 @@
 import type { AgentProject, HealthStatus, ProjectSummary, StoredDocument } from '../types/agent';
 
+export type UploadLifecycleStage = 'uploading' | 'processing';
+
+export interface UploadProgressCallback {
+  (stage: UploadLifecycleStage, progressPercent?: number): void;
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -10,6 +16,59 @@ async function handleResponse<T>(response: Response): Promise<T> {
     throw new Error(message);
   }
   return data as T;
+}
+
+function sendMultipartWithProgress<T>(
+  url: string,
+  formData: FormData,
+  onStageChange?: UploadProgressCallback
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+
+    onStageChange?.('uploading', 0);
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && event.total > 0) {
+        const pct = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        if (pct >= 100) {
+          onStageChange?.('processing', 100);
+        } else {
+          onStageChange?.('uploading', pct);
+        }
+      }
+    };
+
+    xhr.upload.onload = () => {
+      onStageChange?.('processing', 100);
+    };
+
+    xhr.onload = () => {
+      let parsed: Record<string, unknown> = {};
+      try {
+        parsed = JSON.parse(xhr.responseText || '{}') as Record<string, unknown>;
+      } catch {
+        // Non-JSON error response fallback
+      }
+
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve(parsed as T);
+      } else {
+        const errorMessage =
+          typeof parsed.error === 'string' && parsed.error.length > 0
+            ? parsed.error
+            : `Request failed with status ${xhr.status}`;
+        reject(new Error(errorMessage));
+      }
+    };
+
+    xhr.onerror = () => {
+      reject(new Error('Network error while uploading documents.'));
+    };
+
+    xhr.send(formData);
+  });
 }
 
 export async function fetchHealth(): Promise<HealthStatus> {
@@ -29,12 +88,15 @@ export async function fetchProjectById(projectId: string): Promise<AgentProject>
   return data.project;
 }
 
-export async function createAgentProject(payload: {
-  name: string;
-  domain: string;
-  brief: string;
-  files: File[];
-}): Promise<AgentProject> {
+export async function createAgentProject(
+  payload: {
+    name: string;
+    domain: string;
+    brief: string;
+    files: File[];
+  },
+  onStageChange?: UploadProgressCallback
+): Promise<AgentProject> {
   const formData = new FormData();
   formData.append('name', payload.name);
   formData.append('domain', payload.domain);
@@ -43,28 +105,29 @@ export async function createAgentProject(payload: {
     formData.append('documents', file);
   }
 
-  const res = await fetch('/api/projects', {
-    method: 'POST',
-    body: formData,
-  });
-  const data = await handleResponse<{ project: AgentProject }>(res);
+  const data = await sendMultipartWithProgress<{ project: AgentProject }>(
+    '/api/projects',
+    formData,
+    onStageChange
+  );
   return data.project;
 }
 
 export async function uploadProjectDocuments(
   projectId: string,
-  files: File[]
+  files: File[],
+  onStageChange?: UploadProgressCallback
 ): Promise<AgentProject> {
   const formData = new FormData();
   for (const file of files) {
     formData.append('documents', file);
   }
 
-  const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/documents`, {
-    method: 'POST',
-    body: formData,
-  });
-  const data = await handleResponse<{ project: AgentProject }>(res);
+  const data = await sendMultipartWithProgress<{ project: AgentProject }>(
+    `/api/projects/${encodeURIComponent(projectId)}/documents`,
+    formData,
+    onStageChange
+  );
   return data.project;
 }
 
