@@ -9,8 +9,20 @@ import {
   regenerateAgentSection,
   validateAgentDefinition,
 } from './server/agentBuilder.ts';
+import {
+  assertEvaluationPrerequisites,
+  auditEvaluationSetWithGemini,
+  coerceEvaluationTestCases,
+  generateEvaluationDataset,
+  regenerateSingleTestCase,
+  validateEvaluationTestCases,
+} from './server/evaluation.ts';
 import { detectAllowedFileType } from './server/documents.ts';
 import { isGeminiConfigured } from './server/gemini.ts';
+import {
+  EVALUATION_PROMPT_TEMPLATES,
+  EVALUATION_PROMPT_VERSION,
+} from './server/prompts/evaluationPrompts.ts';
 import {
   applyEditableRequirementsPatch,
   generateClarificationQuestions,
@@ -28,11 +40,16 @@ import {
   MAX_FILES_PER_PROJECT,
   removeDocumentFromProject,
   saveProjectAgentConfig,
+  saveProjectEvaluation,
   saveProjectIntakeInterview,
   saveProjectRequirements,
   type IncomingUploadedFile,
 } from './server/storage.ts';
-import type { AgentSectionKey, AgentVersionRecord } from './server/types.ts';
+import type {
+  AgentSectionKey,
+  AgentVersionRecord,
+  EvaluationDatasetVersion,
+} from './server/types.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB per document
@@ -634,6 +651,313 @@ async function startServer(): Promise<void> {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to save agent definition.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Expose versioned evaluation prompt templates for transparency
+  app.get('/api/evaluation/prompts', (_req, res) => {
+    res.json({
+      version: EVALUATION_PROMPT_VERSION,
+      prompts: EVALUATION_PROMPT_TEMPLATES,
+    });
+  });
+
+  // Automatically generate >= 20 grounded evaluation test cases (preserves prior versions)
+  app.post('/api/projects/:id/evaluation/generate', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      try {
+        assertEvaluationPrerequisites(project, extractedDocs, {
+          requireDocuments: true,
+        });
+      } catch (prereqError) {
+        res.status(400).json({
+          error:
+            prereqError instanceof Error
+              ? prereqError.message
+              : 'Evaluation prerequisites are not met.',
+        });
+        return;
+      }
+
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error:
+            'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const generated = await generateEvaluationDataset(project, extractedDocs);
+      const existingVersions = project.evaluation?.versions ?? [];
+      const maxVersion = existingVersions.reduce(
+        (max, item) => Math.max(max, item.version),
+        0
+      );
+      const nextVersion = maxVersion + 1;
+      const now = new Date().toISOString();
+
+      const newRecord: EvaluationDatasetVersion = {
+        version: nextVersion,
+        agentVersion: generated.savedAgentVersion.version,
+        agentName: generated.savedAgentVersion.definition.agentName || project.name,
+        createdAt: now,
+        updatedAt: now,
+        source: 'generated',
+        promptVersion: EVALUATION_PROMPT_VERSION,
+        documentAnalysisSummary: generated.documentAnalysisSummary,
+        testCases: generated.testCases,
+        validation: generated.validation,
+      };
+
+      const updated = await saveProjectEvaluation(project.id, {
+        currentVersion: nextVersion,
+        versions: [...existingVersions, newRecord],
+        savedVersion: project.evaluation?.savedVersion ?? null,
+        savedAt: project.evaluation?.savedAt ?? null,
+      });
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to generate evaluation test cases.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Regenerate a single evaluation test case without discarding the rest of the set
+  app.post('/api/projects/:id/evaluation/regenerate-case', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error:
+            'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      try {
+        assertEvaluationPrerequisites(project, extractedDocs);
+      } catch (prereqError) {
+        res.status(400).json({
+          error:
+            prereqError instanceof Error
+              ? prereqError.message
+              : 'Evaluation prerequisites are not met.',
+        });
+        return;
+      }
+
+      const testCaseId =
+        typeof req.body?.testCaseId === 'string' ? req.body.testCaseId.trim() : '';
+      const instruction =
+        typeof req.body?.instruction === 'string' ? req.body.instruction.trim() : undefined;
+
+      const currentCases = coerceEvaluationTestCases(
+        req.body?.currentTestCases,
+        extractedDocs
+      );
+      const targetIndex = currentCases.findIndex((tc) => tc.id === testCaseId);
+      if (targetIndex === -1) {
+        res.status(400).json({ error: `Test case "${testCaseId}" not found.` });
+        return;
+      }
+
+      const regenerated = await regenerateSingleTestCase(
+        project,
+        extractedDocs,
+        currentCases,
+        currentCases[targetIndex],
+        instruction
+      );
+
+      const updatedCases = currentCases.map((tc, idx) =>
+        idx === targetIndex ? regenerated : tc
+      );
+      const validation = validateEvaluationTestCases(
+        project,
+        extractedDocs,
+        updatedCases
+      );
+
+      res.json({
+        updatedCase: regenerated,
+        testCases: updatedCases,
+        validation,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to regenerate evaluation test case.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Validate evaluation test cases (deterministic + optional Gemini semantic audit)
+  app.post('/api/projects/:id/evaluation/validate', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      assertEvaluationPrerequisites(project, extractedDocs);
+
+      const testCases = coerceEvaluationTestCases(req.body?.testCases, extractedDocs);
+      const validation = validateEvaluationTestCases(project, extractedDocs, testCases);
+
+      if (Boolean(req.body?.useAiAudit)) {
+        if (!isGeminiConfigured()) {
+          res.status(503).json({
+            error:
+              'GEMINI_API_KEY is not configured on the server for AI semantic audit.',
+          });
+          return;
+        }
+        const auditIssues = await auditEvaluationSetWithGemini(
+          project,
+          extractedDocs,
+          testCases
+        );
+        for (const issue of auditIssues) {
+          if (issue.severity === 'error') {
+            validation.errors.push(issue);
+          } else {
+            validation.warnings.push(issue);
+          }
+        }
+        validation.valid = validation.errors.length === 0;
+      }
+
+      res.json({ testCases, validation });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to validate evaluation dataset.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 400;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Save and version a validated evaluation test suite (blocks invalid datasets)
+  app.put('/api/projects/:id/evaluation/save', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      const { savedAgentVersion } = assertEvaluationPrerequisites(
+        project,
+        extractedDocs
+      );
+
+      const testCases = coerceEvaluationTestCases(req.body?.testCases, extractedDocs);
+      const validation = validateEvaluationTestCases(project, extractedDocs, testCases);
+
+      if (!validation.valid) {
+        res.status(400).json({
+          error:
+            validation.errors[0]?.message ||
+            'Evaluation dataset failed validation checks.',
+          validation,
+        });
+        return;
+      }
+
+      const existingVersions = project.evaluation?.versions ?? [];
+      const baseVersion =
+        typeof req.body?.baseVersion === 'number' ? req.body.baseVersion : null;
+      const source =
+        req.body?.source === 'generated' || req.body?.source === 'case_regenerated'
+          ? req.body.source
+          : 'manual_edit';
+      const documentAnalysisSummary =
+        typeof req.body?.documentAnalysisSummary === 'string'
+          ? req.body.documentAnalysisSummary.trim()
+          : '';
+
+      const now = new Date().toISOString();
+      const matchingExisting =
+        baseVersion !== null
+          ? existingVersions.find((v) => v.version === baseVersion)
+          : undefined;
+
+      const isUnchangedFromBase =
+        Boolean(matchingExisting) &&
+        matchingExisting?.agentVersion === savedAgentVersion.version &&
+        JSON.stringify(matchingExisting?.testCases) === JSON.stringify(testCases);
+
+      let nextVersions: EvaluationDatasetVersion[];
+      let savedVersionNumber: number;
+
+      if (isUnchangedFromBase && matchingExisting) {
+        savedVersionNumber = matchingExisting.version;
+        nextVersions = existingVersions.map((v) =>
+          v.version === matchingExisting.version
+            ? { ...v, updatedAt: now, validation }
+            : v
+        );
+      } else {
+        const maxVersion = existingVersions.reduce(
+          (max, item) => Math.max(max, item.version),
+          0
+        );
+        savedVersionNumber = maxVersion + 1;
+        const newRecord: EvaluationDatasetVersion = {
+          version: savedVersionNumber,
+          agentVersion: savedAgentVersion.version,
+          agentName: savedAgentVersion.definition.agentName || project.name,
+          createdAt: now,
+          updatedAt: now,
+          source,
+          promptVersion: EVALUATION_PROMPT_VERSION,
+          documentAnalysisSummary:
+            documentAnalysisSummary ||
+            matchingExisting?.documentAnalysisSummary ||
+            '',
+          testCases,
+          validation,
+        };
+        nextVersions = [...existingVersions, newRecord];
+      }
+
+      const updated = await saveProjectEvaluation(project.id, {
+        currentVersion: savedVersionNumber,
+        versions: nextVersions,
+        savedVersion: savedVersionNumber,
+        savedAt: now,
+      });
+
+      res.json({ project: updated, validation });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to save evaluation dataset.';
       res.status(400).json({ error: message });
     }
   });

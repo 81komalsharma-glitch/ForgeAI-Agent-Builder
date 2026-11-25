@@ -3,14 +3,20 @@ import type {
   AgentProject,
   AgentSectionKey,
   AgentValidationResult,
+  EvaluationPromptTemplateMeta,
+  EvaluationTestCase,
+  EvaluationValidationResult,
   HealthStatus,
   ProjectSummary,
   StoredDocument,
 } from '../types/agent';
 
 export class ApiValidationError extends Error {
-  validation?: AgentValidationResult;
-  constructor(message: string, validation?: AgentValidationResult) {
+  validation?: AgentValidationResult | EvaluationValidationResult;
+  constructor(
+    message: string,
+    validation?: AgentValidationResult | EvaluationValidationResult
+  ) {
     super(message);
     this.name = 'ApiValidationError';
     this.validation = validation;
@@ -306,3 +312,98 @@ export async function saveAgentDefinition(
   );
   return handleResponse<{ project: AgentProject; validation: AgentValidationResult }>(res);
 }
+
+export async function fetchEvaluationPrompts(): Promise<{
+  version: string;
+  prompts: EvaluationPromptTemplateMeta[];
+}> {
+  const res = await fetch('/api/evaluation/prompts');
+  return handleResponse<{
+    version: string;
+    prompts: EvaluationPromptTemplateMeta[];
+  }>(res);
+}
+
+export async function generateEvaluationDataset(
+  projectId: string
+): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/generate`,
+    { method: 'POST' }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
+}
+
+export async function regenerateEvaluationTestCase(
+  projectId: string,
+  payload: {
+    testCaseId: string;
+    currentTestCases: EvaluationTestCase[];
+    instruction?: string;
+  }
+): Promise<{
+  updatedCase: EvaluationTestCase;
+  testCases: EvaluationTestCase[];
+  validation: EvaluationValidationResult;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/regenerate-case`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+  return handleResponse<{
+    updatedCase: EvaluationTestCase;
+    testCases: EvaluationTestCase[];
+    validation: EvaluationValidationResult;
+  }>(res);
+}
+
+export async function validateEvaluationDataset(
+  projectId: string,
+  testCases: EvaluationTestCase[],
+  useAiAudit = false
+): Promise<{
+  testCases: EvaluationTestCase[];
+  validation: EvaluationValidationResult;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/validate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCases, useAiAudit }),
+    }
+  );
+  return handleResponse<{
+    testCases: EvaluationTestCase[];
+    validation: EvaluationValidationResult;
+  }>(res);
+}
+
+export async function saveEvaluationDataset(
+  projectId: string,
+  payload: {
+    testCases: EvaluationTestCase[];
+    baseVersion: number | null;
+    source: 'generated' | 'manual_edit' | 'case_regenerated';
+    documentAnalysisSummary?: string;
+  }
+): Promise<{ project: AgentProject; validation: EvaluationValidationResult }> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/save`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    validation: EvaluationValidationResult;
+  }>(res);
+}
+

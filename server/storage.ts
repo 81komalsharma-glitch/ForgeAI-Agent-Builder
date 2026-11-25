@@ -6,6 +6,7 @@ import type {
   AgentBuilderState,
   AgentProject,
   AgentRequirements,
+  EvaluationState,
   IntakeInterviewState,
   PipelineStage,
   ProjectSummary,
@@ -58,6 +59,7 @@ function normalizeProjectRecord(raw: AgentProject): AgentProject {
     intakeInterview: raw.intakeInterview ?? null,
     requirements: raw.requirements ?? null,
     agentConfig: raw.agentConfig ?? null,
+    evaluation: raw.evaluation ?? null,
   };
 }
 
@@ -68,6 +70,12 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
   const savedRecord =
     savedVer !== null
       ? project.agentConfig?.versions.find((v) => v.version === savedVer) ?? null
+      : null;
+
+  const evalSavedVer = project.evaluation?.savedVersion ?? null;
+  const evalSavedRecord =
+    evalSavedVer !== null
+      ? project.evaluation?.versions.find((v) => v.version === evalSavedVer) ?? null
       : null;
 
   return {
@@ -87,6 +95,12 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
     hasAgentConfig: Boolean(project.agentConfig && project.agentConfig.versions.length > 0),
     agentSavedVersion: savedVer,
     agentValid: Boolean(savedRecord?.validation.valid),
+    hasEvaluationDataset: Boolean(
+      project.evaluation && project.evaluation.versions.length > 0
+    ),
+    evaluationSavedVersion: evalSavedVer,
+    evaluationValid: Boolean(evalSavedRecord?.validation.valid),
+    evaluationTestCaseCount: evalSavedRecord?.testCases.length ?? 0,
   };
 }
 
@@ -298,6 +312,23 @@ export async function saveProjectAgentConfig(
   if (!project) return null;
 
   project.agentConfig = agentConfig;
+  if (stage) {
+    project.stage = stage;
+  }
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
+}
+
+export async function saveProjectEvaluation(
+  projectId: string,
+  evaluation: EvaluationState,
+  stage?: PipelineStage
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  project.evaluation = evaluation;
   if (stage) {
     project.stage = stage;
   }

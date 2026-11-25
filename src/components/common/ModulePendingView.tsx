@@ -10,17 +10,12 @@ interface ModuleMetadata {
 }
 
 const MODULE_INFO: Record<
-  Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements' | 'builder'>,
+  Exclude<
+    NavSectionId,
+    'dashboard' | 'create' | 'requirements' | 'builder' | 'evaluation'
+  >,
   ModuleMetadata
 > = {
-  evaluation: {
-    title: 'Evaluation',
-    stepNumber: 'Stage 04',
-    purpose:
-      'Automatically generate domain-specific test cases and run the configured agent against them to measure accuracy, grounding, and constraint adherence.',
-    plannedInputs: 'Saved, validated agent configuration and requirements test criteria.',
-    plannedOutputs: 'Structured test cases and real pass/fail evaluation results.',
-  },
   optimizer: {
     title: 'Optimizer',
     stepNumber: 'Stage 05',
@@ -48,7 +43,10 @@ const MODULE_INFO: Record<
 };
 
 interface ModulePendingViewProps {
-  section: Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements' | 'builder'>;
+  section: Exclude<
+    NavSectionId,
+    'dashboard' | 'create' | 'requirements' | 'builder' | 'evaluation'
+  >;
   selectedProject: ProjectSummary | null;
   onNavigate: (section: NavSectionId) => void;
 }
@@ -59,12 +57,14 @@ export function ModulePendingView({
   onNavigate,
 }: ModulePendingViewProps) {
   const info = MODULE_INFO[section];
-  const needsSavedAgentDefinition =
-    section === 'evaluation' &&
+  const needsSavedEvaluation =
+    section === 'optimizer' &&
     (!selectedProject ||
       !selectedProject.requirementsApproved ||
       selectedProject.agentSavedVersion === null ||
-      !selectedProject.agentValid);
+      !selectedProject.agentValid ||
+      selectedProject.evaluationSavedVersion === null ||
+      !selectedProject.evaluationValid);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -80,19 +80,21 @@ export function ModulePendingView({
           {info.purpose}
         </p>
 
-        {needsSavedAgentDefinition ? (
+        {needsSavedEvaluation ? (
           <div className="mt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
             <div className="flex items-start gap-3">
               <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" aria-hidden="true" />
               <div className="text-xs text-amber-900 leading-relaxed">
                 <span className="font-semibold">
-                  Valid saved agent definition required.
+                  Saved valid evaluation dataset required.
                 </span>{' '}
                 {!selectedProject
-                  ? 'Create a project, approve its requirements, and save a valid agent definition in Agent Builder before continuing to Evaluation.'
+                  ? 'Create a project, approve requirements, save an agent definition, and save a valid evaluation dataset first.'
                   : !selectedProject.requirementsApproved
-                    ? 'Approve the project requirements first, then generate and save a valid agent definition in Agent Builder.'
-                    : 'Generate, validate, and click Save Definition in Agent Builder before continuing to Evaluation.'}
+                    ? 'Approve the project requirements first.'
+                    : selectedProject.agentSavedVersion === null || !selectedProject.agentValid
+                      ? 'Save a valid agent definition in Agent Builder first.'
+                      : 'Generate, validate, and save an evaluation dataset (>= 20 test cases) in Evaluation first.'}
               </div>
             </div>
             <button
@@ -103,7 +105,10 @@ export function ModulePendingView({
                     ? 'create'
                     : !selectedProject.requirementsApproved
                       ? 'requirements'
-                      : 'builder'
+                      : selectedProject.agentSavedVersion === null ||
+                          !selectedProject.agentValid
+                        ? 'builder'
+                        : 'evaluation'
                 )
               }
               className="px-3.5 py-2 rounded-lg bg-[#1E3A8A] text-white text-xs font-medium hover:bg-[#1E40AF] transition-colors whitespace-nowrap shrink-0"
@@ -112,7 +117,10 @@ export function ModulePendingView({
                 ? 'Create Agent'
                 : !selectedProject.requirementsApproved
                   ? 'Go to Requirements'
-                  : 'Go to Agent Builder'}
+                  : selectedProject.agentSavedVersion === null ||
+                      !selectedProject.agentValid
+                    ? 'Go to Agent Builder'
+                    : 'Go to Evaluation'}
             </button>
           </div>
         ) : (
@@ -120,8 +128,9 @@ export function ModulePendingView({
             <Info className="w-4 h-4 text-[#1E3A8A] shrink-0 mt-0.5" aria-hidden="true" />
             <div className="text-xs text-slate-700 leading-relaxed">
               <span className="font-semibold text-slate-900">
-                {section === 'evaluation' && selectedProject?.agentSavedVersion !== null
-                  ? `Agent definition v${selectedProject?.agentSavedVersion} saved and valid — Evaluation module is next.`
+                {section === 'optimizer' &&
+                selectedProject?.evaluationSavedVersion !== null
+                  ? `Evaluation dataset v${selectedProject?.evaluationSavedVersion} (${selectedProject?.evaluationTestCaseCount} test cases) saved and valid — Evaluation Runner & Optimizer is next.`
                   : 'Module not yet implemented.'}
               </span>{' '}
               This stage will be implemented in the next step. No simulated prompts, scores, or test results are displayed here.

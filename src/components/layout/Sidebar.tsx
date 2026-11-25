@@ -24,7 +24,7 @@ export const NAV_ITEMS: NavItem[] = [
   { id: 'create', label: 'Create Agent', group: 'foundation', implemented: true },
   { id: 'requirements', label: 'Requirements', group: 'pipeline', implemented: true },
   { id: 'builder', label: 'Agent Builder', group: 'pipeline', implemented: true },
-  { id: 'evaluation', label: 'Evaluation', group: 'pipeline', implemented: false },
+  { id: 'evaluation', label: 'Evaluation', group: 'pipeline', implemented: true },
   { id: 'optimizer', label: 'Optimizer', group: 'pipeline', implemented: false },
   { id: 'reports', label: 'Reports', group: 'pipeline', implemented: false },
   { id: 'chat', label: 'Chat with Agent', group: 'pipeline', implemented: false },

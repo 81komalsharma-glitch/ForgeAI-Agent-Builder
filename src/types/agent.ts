@@ -177,6 +177,72 @@ export interface AgentBuilderState {
   savedAt: string | null;
 }
 
+export type EvaluationCategory = 'answerable' | 'out_of_scope' | 'edge_case';
+
+export type EvaluationDifficulty = 'easy' | 'medium' | 'hard';
+
+export interface EvaluationTestCase {
+  id: string;
+  question: string;
+  category: EvaluationCategory;
+  difficulty: EvaluationDifficulty;
+  expectedBehavior: string;
+  expectedKeyFacts: string[];
+  expectedSourceDocument: string | null;
+  supportingEvidence: string;
+  expectedRefusal: boolean;
+  reason: string;
+}
+
+export interface EvaluationValidationIssue {
+  testCaseId?: string;
+  field: string;
+  severity: 'error' | 'warning';
+  message: string;
+}
+
+export interface EvaluationValidationStats {
+  total: number;
+  byCategory: Record<EvaluationCategory, number>;
+  byDifficulty: Record<EvaluationDifficulty, number>;
+  duplicatePairs: number;
+}
+
+export interface EvaluationValidationResult {
+  valid: boolean;
+  errors: EvaluationValidationIssue[];
+  warnings: EvaluationValidationIssue[];
+  checkedAt: string;
+  stats: EvaluationValidationStats;
+}
+
+export interface EvaluationDatasetVersion {
+  version: number;
+  agentVersion: number;
+  agentName: string;
+  createdAt: string;
+  updatedAt: string;
+  source: 'generated' | 'manual_edit' | 'case_regenerated';
+  promptVersion: string;
+  documentAnalysisSummary: string;
+  testCases: EvaluationTestCase[];
+  validation: EvaluationValidationResult;
+}
+
+export interface EvaluationState {
+  currentVersion: number;
+  versions: EvaluationDatasetVersion[];
+  savedVersion: number | null;
+  savedAt: string | null;
+}
+
+export interface EvaluationPromptTemplateMeta {
+  id: string;
+  title: string;
+  version: string;
+  template: string;
+}
+
 export interface StoredDocument {
   id: string;
   projectId: string;
@@ -211,7 +277,7 @@ export interface AgentProject {
   intakeInterview: IntakeInterviewState | null;
   requirements: AgentRequirements | null;
   agentConfig: AgentBuilderState | null;
-  evaluation: null;
+  evaluation: EvaluationState | null;
   optimization: null;
   report: null;
 }
@@ -233,6 +299,10 @@ export interface ProjectSummary {
   hasAgentConfig: boolean;
   agentSavedVersion: number | null;
   agentValid: boolean;
+  hasEvaluationDataset: boolean;
+  evaluationSavedVersion: number | null;
+  evaluationValid: boolean;
+  evaluationTestCaseCount: number;
 }
 
 export interface HealthStatus {
