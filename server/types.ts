@@ -526,6 +526,311 @@ export interface OptimizationState {
   activeOptimizationRunId: string | null;
 }
 
+export type ReportCompletenessStatus = 'complete' | 'partial' | 'early_draft';
+
+export type ReportSectionAvailability =
+  | 'available'
+  | 'partial'
+  | 'incomplete'
+  | 'not_run'
+  | 'not_available';
+
+export interface ReportScorecard {
+  overallScore: number | null;
+  groundingScore: number | null;
+  correctnessScore: number | null;
+  refusalQualityScore: number | null;
+  refusalScoreStatus: 'available' | 'unavailable' | 'not_available';
+  passedTests: number | null;
+  failedTests: number | null;
+  errorTests: number | null;
+  skippedTests: number | null;
+  evaluatedTests: number | null;
+  totalTests: number | null;
+  passRatePercent: number | null;
+}
+
+export interface ReportCategoryResult {
+  category: EvaluationCategory;
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  errors: number;
+  skipped: number;
+  passRatePercent: number | null;
+  avgGroundingPercent: number | null;
+  avgCorrectnessPercent: number | null;
+  avgRefusalPercent: number | null;
+}
+
+export interface ReportFailureDetail {
+  testCaseId: string;
+  category: EvaluationCategory;
+  difficulty: EvaluationDifficulty;
+  question: string;
+  status: EvaluationTestRunStatus;
+  failureReason: string;
+  errorMessage?: string;
+  expectedBehavior: string;
+  actualAnswer: string;
+  retrievedSources: string[];
+  groundingScore: number | null;
+  correctnessScore: number | null;
+  refusalScore: number | null;
+  judgeFailureReasons: string[];
+}
+
+export interface ReportIterationEntry {
+  iterationNumber: number;
+  status: OptimizationIterationStatus;
+  baseAgentVersion: number;
+  newAgentVersion: number | null;
+  analyzedAt: string;
+  completedAt: string | null;
+  analysisSummary: string;
+  failuresAnalyzedCount: number;
+  failureClassifications: FailureClassificationRecord[];
+  changesProposedCount: number;
+  changesApprovedCount: number;
+  changesRejectedCount: number;
+  proposedChanges: ProposedOptimizationChange[];
+  appliedChangesSummary: string[];
+  previousScorecard: ScorecardSnapshot;
+  newScorecard: ScorecardSnapshot | null;
+  scoreDelta: {
+    overall: number | null;
+    grounding: number | null;
+    correctness: number | null;
+    refusalQuality: number | null;
+  };
+  outcomeLabel: 'improved' | 'regressed' | 'unchanged' | 'not_completed';
+  remainingFailureCount: number | null;
+  remainingFailedTestIds: string[];
+  decisionReason: string;
+}
+
+export interface ReportTestResultEntry {
+  testCaseId: string;
+  category: EvaluationCategory;
+  difficulty: EvaluationDifficulty;
+  question: string;
+  expectedBehavior: string;
+  expectedRefusal: boolean;
+  expectedSourceDocument: string | null;
+  status: EvaluationTestRunStatus;
+  actualAnswer: string;
+  sourcesRetrieved: string[];
+  groundingScore: number | null;
+  correctnessScore: number | null;
+  refusalScore: number | null;
+  failureReason: string;
+  errorMessage?: string;
+}
+
+export interface ReportValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  checkedAt: string;
+}
+
+export interface ProjectReportVersion {
+  version: number;
+  reportId: string;
+  generatedAt: string;
+  completenessStatus: ReportCompletenessStatus;
+  missingArtifacts: string[];
+  narrativeMode: 'gemini' | 'deterministic_fallback';
+  narrativeNote: string;
+  validation: ReportValidationResult;
+  projectOverview: {
+    projectId: string;
+    projectName: string;
+    domain: string;
+    agentName: string;
+    agentPurpose: string;
+    targetAudience: string;
+    responseTone: string;
+    pipelineStage: PipelineStage;
+    createdAt: string;
+    updatedAt: string;
+    uploadedDocumentsCount: number;
+    totalDocumentBytes: number;
+    uploadedDocuments: Array<{
+      id: string;
+      name: string;
+      fileType: DocumentFileType;
+      sizeBytes: number;
+      parseStatus: DocumentParseStatus;
+      charCount: number;
+      lineCount: number;
+      pageCount: number | null;
+      csvRowCount?: number;
+      uploadedAt: string;
+    }>;
+  };
+  requirementsAnalysis: {
+    availability: ReportSectionAvailability;
+    originalBrief: string;
+    clarificationInterview: {
+      status: string;
+      analysisSummary: string;
+      questionsAndAnswers: Array<{
+        questionId: string;
+        question: string;
+        answer: string;
+        skipped: boolean;
+      }>;
+    } | null;
+    approvedRequirements: {
+      approved: boolean;
+      approvedAt: string | null;
+      scope: string[];
+      mustAnswerTopics: string[];
+      mustRefuseTopics: string[];
+      outOfScopeTopics: string[];
+      responseToneAndStyle: string;
+      knowledgeSourcesAvailable: string[];
+    } | null;
+    groundability: {
+      overallStatus: GroundabilityStatus | 'Not Available';
+      summary: string;
+      supportedRequirements: GroundabilityCheckItem[];
+      partiallySupportedRequirements: GroundabilityCheckItem[];
+      unsupportedRequirements: GroundabilityCheckItem[];
+    } | null;
+    limitationsAndAssumptions: string[];
+  };
+  agentDefinitionSection: {
+    availability: ReportSectionAvailability;
+    originalVersionNumber: number | null;
+    finalVersionNumber: number | null;
+    finalAgentName: string;
+    systemPrompt: AgentSystemPrompt | null;
+    knowledgeConfig: AgentKnowledgeConfig | null;
+    selectedTools: Array<{
+      id: string;
+      toolName: string;
+      description: string;
+      whenToUse: string;
+      selectionReason: string;
+      implementationStatus: string;
+    }>;
+    outputContract: AgentOutputContract | null;
+    versionHistory: Array<{
+      version: number;
+      source: AgentVersionRecord['source'];
+      createdAt: string;
+      updatedAt: string;
+      notes: string;
+      valid: boolean;
+      errorCount: number;
+      warningCount: number;
+    }>;
+  };
+  evaluationMethodology: {
+    availability: ReportSectionAvailability;
+    datasetVersion: number | null;
+    datasetSource: string | null;
+    datasetValidationValid: boolean | null;
+    totalTestCases: number | null;
+    countsByCategory: {
+      answerable: number | null;
+      out_of_scope: number | null;
+      edge_case: number | null;
+    };
+    countsByDifficulty: {
+      easy: number | null;
+      medium: number | null;
+      hard: number | null;
+    };
+    judgeRubric: {
+      scale: string;
+      dimensions: Array<{
+        name: string;
+        weightPercent: number;
+        criteria: string;
+      }>;
+      passCriteria: string;
+    };
+    scoringWeights: {
+      grounding: number;
+      correctness: number;
+      refusal: number;
+    };
+    deterministicValidationChecks: string[];
+  };
+  baselineEvaluation: {
+    availability: ReportSectionAvailability;
+    runId: string | null;
+    agentVersion: number | null;
+    datasetVersion: number | null;
+    runStatus: EvaluationRunStatus | null;
+    isIncompleteEvaluation: boolean;
+    incompleteReason: string | null;
+    startedAt: string | null;
+    completedAt: string | null;
+    scorecard: ReportScorecard;
+    categoryBreakdown: ReportCategoryResult[];
+    importantFailures: ReportFailureDetail[];
+  };
+  optimizationHistory: {
+    availability: ReportSectionAvailability;
+    optimizationRunId: string | null;
+    status: string | null;
+    stoppingReason: OptimizationStoppingReason;
+    stoppingReasonLabel: string;
+    stoppingDetail: string;
+    baselineAgentVersion: number | null;
+    baselineDatasetVersion: number | null;
+    maxIterations: number;
+    iterationsCompleted: number;
+    failureCategorySummary: Record<FailureCategory, number>;
+    iterations: ReportIterationEntry[];
+  };
+  finalResults: {
+    availability: ReportSectionAvailability;
+    finalAgentVersion: number | null;
+    finalEvaluationRunId: string | null;
+    finalEvaluationStatus: EvaluationRunStatus | null;
+    isIncompleteEvaluation: boolean;
+    incompleteReason: string | null;
+    finalScorecard: ReportScorecard;
+    baselineVsFinalComparison: {
+      overallDelta: number | null;
+      groundingDelta: number | null;
+      correctnessDelta: number | null;
+      refusalDelta: number | null;
+      passedDelta: number | null;
+      failedDelta: number | null;
+      sameDatasetEnforced: boolean | null;
+      baselineDatasetVersion: number | null;
+      finalDatasetVersion: number | null;
+    };
+    totalIterationsCompleted: number;
+    improved: boolean | null;
+    improvementSummary: string;
+    remainingKnownFailures: ReportFailureDetail[];
+    allTestResults: ReportTestResultEntry[];
+  };
+  limitationsAndFutureImprovements: {
+    executiveSummary: string;
+    unsupportedRequirements: string[];
+    retrievalLimitations: string[];
+    evaluationLimitations: string[];
+    knownAgentWeaknesses: string[];
+    unimplementedFeatures: string[];
+    recommendedNextImprovements: string[];
+  };
+}
+
+export interface ProjectReportState {
+  currentVersion: number;
+  latestVersion: number | null;
+  versions: ProjectReportVersion[];
+}
+
 export interface AgentProject {
   id: string;
   name: string;
@@ -543,8 +848,7 @@ export interface AgentProject {
   evaluation: EvaluationState | null;
   evaluationRuns: EvaluationRunRecord[];
   optimization: OptimizationState | null;
-  // Reserved for upcoming pipeline stage; always null until generated by real API workflows
-  report: null;
+  report: ProjectReportState | null;
 }
 
 export interface ProjectSummary {
@@ -575,4 +879,7 @@ export interface ProjectSummary {
   latestOptimizationScore: number | null;
   latestOptimizationBaselineScore: number | null;
   optimizationIterationsCompleted: number;
+  reportCount: number;
+  latestReportVersion: number | null;
+  latestReportGeneratedAt: string | null;
 }

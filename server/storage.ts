@@ -12,6 +12,8 @@ import type {
   OptimizationRunRecord,
   OptimizationState,
   PipelineStage,
+  ProjectReportState,
+  ProjectReportVersion,
   ProjectSummary,
   StoredDocument,
   StoredExtractedDocument,
@@ -68,6 +70,10 @@ function normalizeProjectRecord(raw: AgentProject): AgentProject {
       raw.optimization && Array.isArray(raw.optimization.runs)
         ? raw.optimization
         : null,
+    report:
+      raw.report && Array.isArray(raw.report.versions)
+        ? raw.report
+        : null,
   };
 }
 
@@ -91,6 +97,12 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
 
   const optRuns = project.optimization?.runs ?? [];
   const latestOptRun = optRuns.length > 0 ? optRuns[optRuns.length - 1] : null;
+
+  const reportVersions = project.report?.versions ?? [];
+  const latestReport =
+    reportVersions.length > 0
+      ? reportVersions[reportVersions.length - 1]
+      : null;
 
   return {
     id: project.id,
@@ -125,6 +137,9 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
     optimizationIterationsCompleted: latestOptRun
       ? latestOptRun.iterations.filter((it) => it.status === 'completed').length
       : 0,
+    reportCount: reportVersions.length,
+    latestReportVersion: latestReport?.version ?? null,
+    latestReportGeneratedAt: latestReport?.generatedAt ?? null,
   };
 }
 
@@ -435,6 +450,27 @@ export async function saveProjectOptimizationRun(
     project.stage = options.stage;
   }
 
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
+}
+
+export async function saveProjectReportVersion(
+  projectId: string,
+  reportVersion: ProjectReportVersion
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  const existingVersions = project.report?.versions ?? [];
+  const nextVersions = [...existingVersions, reportVersion];
+  const reportState: ProjectReportState = {
+    currentVersion: reportVersion.version,
+    latestVersion: reportVersion.version,
+    versions: nextVersions,
+  };
+
+  project.report = reportState;
   project.updatedAt = new Date().toISOString();
   await saveProjectRecord(project);
   return project;
