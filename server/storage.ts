@@ -4,6 +4,9 @@ import path from 'path';
 import { parseUploadedDocument } from './documents.ts';
 import type {
   AgentProject,
+  AgentRequirements,
+  IntakeInterviewState,
+  PipelineStage,
   ProjectSummary,
   StoredDocument,
   StoredExtractedDocument,
@@ -46,18 +49,33 @@ export async function ensureStorageDirs(): Promise<void> {
   await fs.mkdir(EXTRACTED_DIR, { recursive: true });
 }
 
-function toProjectSummary(project: AgentProject): ProjectSummary {
+function normalizeProjectRecord(raw: AgentProject): AgentProject {
+  return {
+    ...raw,
+    targetAudience: raw.targetAudience ?? '',
+    responseTone: raw.responseTone ?? '',
+    intakeInterview: raw.intakeInterview ?? null,
+    requirements: raw.requirements ?? null,
+  };
+}
+
+function toProjectSummary(rawProject: AgentProject): ProjectSummary {
+  const project = normalizeProjectRecord(rawProject);
   const totalDocumentBytes = project.documents.reduce((acc, doc) => acc + doc.sizeBytes, 0);
   return {
     id: project.id,
     name: project.name,
     domain: project.domain,
+    targetAudience: project.targetAudience,
+    responseTone: project.responseTone,
     brief: project.brief,
     stage: project.stage,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
     documentCount: project.documents.length,
     totalDocumentBytes,
+    hasRequirements: project.requirements !== null,
+    requirementsApproved: Boolean(project.requirements?.approved),
   };
 }
 
@@ -90,7 +108,7 @@ export async function getProjectById(projectId: string): Promise<AgentProject | 
   const filePath = resolveInsideDir(PROJECTS_DIR, `${projectId}.json`);
   try {
     const raw = await fs.readFile(filePath, 'utf-8');
-    return JSON.parse(raw) as AgentProject;
+    return normalizeProjectRecord(JSON.parse(raw) as AgentProject);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return null;
@@ -183,6 +201,8 @@ async function cleanupDocumentFiles(doc: StoredDocument): Promise<void> {
 export async function createProject(input: {
   name: string;
   domain: string;
+  targetAudience: string;
+  responseTone: string;
   brief: string;
   files: IncomingUploadedFile[];
 }): Promise<AgentProject> {
@@ -205,11 +225,14 @@ export async function createProject(input: {
       id: projectId,
       name: input.name,
       domain: input.domain,
+      targetAudience: input.targetAudience,
+      responseTone: input.responseTone,
       brief: input.brief,
       stage: 'brief_submitted',
       createdAt: now,
       updatedAt: now,
       documents: storedDocuments,
+      intakeInterview: null,
       requirements: null,
       agentConfig: null,
       evaluation: null,
@@ -225,6 +248,34 @@ export async function createProject(input: {
     }
     throw error;
   }
+}
+
+export async function saveProjectIntakeInterview(
+  projectId: string,
+  intakeInterview: IntakeInterviewState
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  project.intakeInterview = intakeInterview;
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
+}
+
+export async function saveProjectRequirements(
+  projectId: string,
+  requirements: AgentRequirements,
+  stage: PipelineStage
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  project.requirements = requirements;
+  project.stage = stage;
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
 }
 
 export async function addDocumentsToProject(

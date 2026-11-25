@@ -25,8 +25,10 @@ export function formatStageLabel(stage: PipelineStage): string {
   switch (stage) {
     case 'brief_submitted':
       return 'Brief Submitted';
+    case 'requirements_draft':
+      return 'Requirements Draft';
     case 'requirements_ready':
-      return 'Requirements Ready';
+      return 'Requirements Approved';
     case 'agent_built':
       return 'Agent Configured';
     case 'evaluated':

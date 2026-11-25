@@ -6,15 +6,23 @@ import { createServer as createViteServer } from 'vite';
 import { detectAllowedFileType } from './server/documents.ts';
 import { isGeminiConfigured } from './server/gemini.ts';
 import {
+  applyEditableRequirementsPatch,
+  generateClarificationQuestions,
+  generateStructuredRequirementsAndGroundability,
+} from './server/requirements.ts';
+import {
   addDocumentsToProject,
   createProject,
   deleteProject,
   ensureStorageDirs,
   getExtractedDocumentText,
   getProjectById,
+  getProjectExtractedDocuments,
   listProjects,
   MAX_FILES_PER_PROJECT,
   removeDocumentFromProject,
+  saveProjectIntakeInterview,
+  saveProjectRequirements,
   type IncomingUploadedFile,
 } from './server/storage.ts';
 
@@ -133,6 +141,10 @@ async function startServer(): Promise<void> {
     try {
       const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
       const domain = typeof req.body?.domain === 'string' ? req.body.domain.trim() : 'General';
+      const targetAudience =
+        typeof req.body?.targetAudience === 'string' ? req.body.targetAudience.trim() : '';
+      const responseTone =
+        typeof req.body?.responseTone === 'string' ? req.body.responseTone.trim() : '';
       const brief = typeof req.body?.brief === 'string' ? req.body.brief.trim() : '';
 
       if (name.length < 2 || name.length > 120) {
@@ -151,6 +163,8 @@ async function startServer(): Promise<void> {
       const project = await createProject({
         name,
         domain: domain || 'General',
+        targetAudience,
+        responseTone,
         brief,
         files,
       });
@@ -159,6 +173,223 @@ async function startServer(): Promise<void> {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to create project.';
       res.status(500).json({ error: message });
+    }
+  });
+
+  // Start or restart AI clarification interview
+  app.post('/api/projects/:id/interview/start', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      const { analysisSummary, questions } = await generateClarificationQuestions(
+        project,
+        extractedDocs
+      );
+
+      const now = new Date().toISOString();
+      const updated = await saveProjectIntakeInterview(project.id, {
+        status: questions.length === 0 ? 'completed' : 'in_progress',
+        analysisSummary,
+        questions,
+        answers: [],
+        generatedAt: now,
+        completedAt: questions.length === 0 ? now : undefined,
+      });
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'Failed to generate clarification interview.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Submit or skip an answer to a clarification question
+  app.post('/api/projects/:id/interview/answer', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!project.intakeInterview) {
+        res.status(400).json({ error: 'Intake interview has not been started yet.' });
+        return;
+      }
+
+      const questionId =
+        typeof req.body?.questionId === 'string' ? req.body.questionId.trim() : '';
+      const skipped = Boolean(req.body?.skipped);
+      const answerText =
+        typeof req.body?.answer === 'string' ? req.body.answer.trim() : '';
+
+      const targetQuestion = project.intakeInterview.questions.find(
+        (q) => q.id === questionId
+      );
+      if (!targetQuestion) {
+        res.status(400).json({ error: 'Question not found in current interview.' });
+        return;
+      }
+
+      if (!skipped && answerText.length === 0) {
+        res.status(400).json({
+          error: 'Please enter an answer or choose Skip Question.',
+        });
+        return;
+      }
+
+      const existingAnswers = project.intakeInterview.answers.filter(
+        (a) => a.questionId !== questionId
+      );
+      existingAnswers.push({
+        questionId,
+        question: targetQuestion.question,
+        answer: skipped ? '' : answerText,
+        skipped,
+      });
+
+      // Keep answers ordered to match questions
+      const orderedAnswers = project.intakeInterview.questions
+        .map((q) => existingAnswers.find((a) => a.questionId === q.id))
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+      const allAnswered =
+        orderedAnswers.length >= project.intakeInterview.questions.length;
+
+      const updated = await saveProjectIntakeInterview(project.id, {
+        ...project.intakeInterview,
+        answers: orderedAnswers,
+        status: allAnswered ? 'completed' : 'in_progress',
+        completedAt: allAnswered ? new Date().toISOString() : undefined,
+      });
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to save interview answer.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Generate structured requirements + Groundability Guard
+  app.post('/api/projects/:id/requirements/generate', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      const answers = project.intakeInterview?.answers ?? [];
+      const requirements = await generateStructuredRequirementsAndGroundability(
+        project,
+        extractedDocs,
+        answers
+      );
+
+      const updated = await saveProjectRequirements(
+        project.id,
+        requirements,
+        'requirements_draft'
+      );
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to generate requirements.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Save edited structured requirements
+  app.put('/api/projects/:id/requirements', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!project.requirements) {
+        res.status(400).json({
+          error: 'Generate requirements before saving edits.',
+        });
+        return;
+      }
+
+      const patched = applyEditableRequirementsPatch(
+        project.requirements,
+        req.body ?? {}
+      );
+      const updated = await saveProjectRequirements(
+        project.id,
+        patched,
+        'requirements_draft'
+      );
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to save requirements edits.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Approve requirements to unlock Agent Builder
+  app.post('/api/projects/:id/requirements/approve', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!project.requirements) {
+        res.status(400).json({
+          error: 'Requirements must be generated before they can be approved.',
+        });
+        return;
+      }
+
+      const now = new Date().toISOString();
+      const approvedRequirements = {
+        ...project.requirements,
+        approved: true,
+        approvedAt: now,
+        updatedAt: now,
+      };
+
+      const updated = await saveProjectRequirements(
+        project.id,
+        approvedRequirements,
+        'requirements_ready'
+      );
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to approve requirements.';
+      res.status(400).json({ error: message });
     }
   });
 

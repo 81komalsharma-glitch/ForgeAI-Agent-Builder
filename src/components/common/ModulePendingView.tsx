@@ -1,4 +1,4 @@
-import { ArrowRight, FolderOpen, Info } from 'lucide-react';
+import { ArrowRight, FolderOpen, Info, Lock } from 'lucide-react';
 import type { NavSectionId, ProjectSummary } from '../../types/agent';
 
 interface ModuleMetadata {
@@ -10,23 +10,15 @@ interface ModuleMetadata {
 }
 
 const MODULE_INFO: Record<
-  Exclude<NavSectionId, 'dashboard' | 'create'>,
+  Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements'>,
   ModuleMetadata
 > = {
-  requirements: {
-    title: 'Requirements',
-    stepNumber: 'Stage 02',
-    purpose:
-      'Analyze the written project brief and uploaded knowledge documents using the Gemini API to extract structured functional requirements, constraints, target personas, and edge cases.',
-    plannedInputs: 'Saved project brief and extracted text from PDF, TXT, and CSV documents.',
-    plannedOutputs: 'Structured requirements specification saved to the project JSON file.',
-  },
   builder: {
     title: 'Agent Builder',
     stepNumber: 'Stage 03',
     purpose:
       'Generate the agent system prompt, tool definitions, and document retrieval configuration tailored to the approved requirements.',
-    plannedInputs: 'Generated requirements specification and document index.',
+    plannedInputs: 'Approved requirements specification and document index.',
     plannedOutputs: 'Versioned agent configuration JSON (system prompt, tools, retrieval settings).',
   },
   evaluation: {
@@ -64,7 +56,7 @@ const MODULE_INFO: Record<
 };
 
 interface ModulePendingViewProps {
-  section: Exclude<NavSectionId, 'dashboard' | 'create'>;
+  section: Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements'>;
   selectedProject: ProjectSummary | null;
   onNavigate: (section: NavSectionId) => void;
 }
@@ -75,6 +67,9 @@ export function ModulePendingView({
   onNavigate,
 }: ModulePendingViewProps) {
   const info = MODULE_INFO[section];
+  const needsRequirementsApproval =
+    section === 'builder' &&
+    (!selectedProject || !selectedProject.requirementsApproved);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -90,15 +85,40 @@ export function ModulePendingView({
           {info.purpose}
         </p>
 
-        <div className="mt-5 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <Info className="w-4 h-4 text-[#1E3A8A] shrink-0 mt-0.5" aria-hidden="true" />
-          <div className="text-xs text-slate-700 leading-relaxed">
-            <span className="font-semibold text-slate-900">
-              Module not yet implemented.
-            </span>{' '}
-            This workspace is currently in Stage 1 (application foundation, project creation, and document ingestion). No simulated scores, prompts, or test results are displayed here.
+        {needsRequirementsApproval ? (
+          <div className="mt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+            <div className="flex items-start gap-3">
+              <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" aria-hidden="true" />
+              <div className="text-xs text-amber-900 leading-relaxed">
+                <span className="font-semibold">
+                  Requirements approval required.
+                </span>{' '}
+                {selectedProject
+                  ? 'Generate and approve the structured requirements for this project before proceeding to Agent Builder.'
+                  : 'Create an agent project and approve its requirements before proceeding to Agent Builder.'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate(selectedProject ? 'requirements' : 'create')}
+              className="px-3.5 py-2 rounded-lg bg-[#1E3A8A] text-white text-xs font-medium hover:bg-[#1E40AF] transition-colors whitespace-nowrap shrink-0"
+            >
+              {selectedProject ? 'Go to Requirements' : 'Create Agent'}
+            </button>
           </div>
-        </div>
+        ) : (
+          <div className="mt-5 flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <Info className="w-4 h-4 text-[#1E3A8A] shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="text-xs text-slate-700 leading-relaxed">
+              <span className="font-semibold text-slate-900">
+                {section === 'builder' && selectedProject?.requirementsApproved
+                  ? 'Requirements approved — Agent Builder module is next.'
+                  : 'Module not yet implemented.'}
+              </span>{' '}
+              This stage will be implemented in the next step. No simulated prompts, scores, or test results are displayed here.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Pipeline Input/Output Specification */}
@@ -126,10 +146,10 @@ export function ModulePendingView({
           {selectedProject ? (
             <button
               type="button"
-              onClick={() => onNavigate('dashboard')}
+              onClick={() => onNavigate('requirements')}
               className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1E3A8A] hover:underline"
             >
-              <span>Inspect on Dashboard</span>
+              <span>View Requirements</span>
               <ArrowRight className="w-3.5 h-3.5" aria-hidden="true" />
             </button>
           ) : null}
@@ -146,7 +166,13 @@ export function ModulePendingView({
               <span aria-hidden="true">·</span>
               <span className="tabular-nums">
                 {selectedProject.documentCount}{' '}
-                {selectedProject.documentCount === 1 ? 'document' : 'documents'} ready
+                {selectedProject.documentCount === 1 ? 'document' : 'documents'}
+              </span>
+              <span aria-hidden="true">·</span>
+              <span>
+                {selectedProject.requirementsApproved
+                  ? 'Requirements Approved'
+                  : 'Requirements Pending Approval'}
               </span>
             </div>
             <p className="text-sm text-slate-600 leading-relaxed line-clamp-4">

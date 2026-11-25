@@ -92,6 +92,8 @@ export async function createAgentProject(
   payload: {
     name: string;
     domain: string;
+    targetAudience: string;
+    responseTone: string;
     brief: string;
     files: File[];
   },
@@ -100,6 +102,8 @@ export async function createAgentProject(
   const formData = new FormData();
   formData.append('name', payload.name);
   formData.append('domain', payload.domain);
+  formData.append('targetAudience', payload.targetAudience);
+  formData.append('responseTone', payload.responseTone);
   formData.append('brief', payload.brief);
   for (const file of payload.files) {
     formData.append('documents', file);
@@ -158,4 +162,63 @@ export async function fetchDocumentExtractedText(
     `/api/projects/${encodeURIComponent(projectId)}/documents/${encodeURIComponent(docId)}/text`
   );
   return handleResponse<{ document: StoredDocument; extractedText: string }>(res);
+}
+
+export async function startIntakeInterview(projectId: string): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/interview/start`,
+    { method: 'POST' }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
+}
+
+export async function submitInterviewAnswer(
+  projectId: string,
+  payload: { questionId: string; answer: string; skipped: boolean }
+): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/interview/answer`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
+}
+
+export async function generateRequirements(projectId: string): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/requirements/generate`,
+    { method: 'POST' }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
+}
+
+export async function updateRequirements(
+  projectId: string,
+  patch: Partial<AgentProject['requirements']>
+): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/requirements`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
+}
+
+export async function approveRequirements(projectId: string): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/requirements/approve`,
+    { method: 'POST' }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
 }

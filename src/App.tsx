@@ -5,17 +5,71 @@ import { TopBar } from './components/layout/TopBar';
 import { ProjectDetailModal } from './components/projects/ProjectDetailModal';
 import { CreateAgentPage } from './pages/CreateAgentPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { RequirementsPage } from './pages/RequirementsPage';
 import { fetchProjects } from './services/api';
 import type { AgentProject, NavSectionId, ProjectSummary } from './types/agent';
 
+const VALID_SECTIONS: NavSectionId[] = [
+  'dashboard',
+  'create',
+  'requirements',
+  'builder',
+  'evaluation',
+  'optimizer',
+  'reports',
+  'chat',
+];
+
+function getInitialSection(): NavSectionId {
+  try {
+    const saved = window.sessionStorage.getItem('forgeai_active_section');
+    if (saved && VALID_SECTIONS.includes(saved as NavSectionId)) {
+      return saved as NavSectionId;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return 'dashboard';
+}
+
+function getSavedProjectId(): string | null {
+  try {
+    return window.localStorage.getItem('forgeai_selected_project_id');
+  } catch {
+    return null;
+  }
+}
+
 export default function App() {
-  const [activeSection, setActiveSection] = useState<NavSectionId>('dashboard');
+  const [activeSection, setActiveSection] = useState<NavSectionId>(getInitialSection);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [projectsError, setProjectsError] = useState<string | null>(null);
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(getSavedProjectId);
   const [inspectProjectId, setInspectProjectId] = useState<string | null>(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  const handleSelectSection = useCallback((section: NavSectionId) => {
+    setActiveSection(section);
+    try {
+      window.sessionStorage.setItem('forgeai_active_section', section);
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
+
+  const handleSelectProject = useCallback((projectId: string | null) => {
+    setSelectedProjectId(projectId);
+    try {
+      if (projectId) {
+        window.localStorage.setItem('forgeai_selected_project_id', projectId);
+      } else {
+        window.localStorage.removeItem('forgeai_selected_project_id');
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
 
   const loadProjects = useCallback(async () => {
     setLoadingProjects(true);
@@ -24,10 +78,22 @@ export default function App() {
       const list = await fetchProjects();
       setProjects(list);
       setSelectedProjectId((current) => {
-        if (current && list.some((item) => item.id === current)) {
-          return current;
+        const next =
+          current && list.some((item) => item.id === current)
+            ? current
+            : list.length > 0
+              ? list[0].id
+              : null;
+        try {
+          if (next) {
+            window.localStorage.setItem('forgeai_selected_project_id', next);
+          } else {
+            window.localStorage.removeItem('forgeai_selected_project_id');
+          }
+        } catch {
+          // Ignore storage access errors
         }
-        return list.length > 0 ? list[0].id : null;
+        return next;
       });
     } catch (err) {
       setProjectsError(
@@ -48,7 +114,7 @@ export default function App() {
   );
 
   const handleProjectCreated = (project: AgentProject) => {
-    setSelectedProjectId(project.id);
+    handleSelectProject(project.id);
     void loadProjects();
   };
 
@@ -56,7 +122,7 @@ export default function App() {
     <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex">
       <Sidebar
         activeSection={activeSection}
-        onSelectSection={setActiveSection}
+        onSelectSection={handleSelectSection}
         selectedProject={selectedProject}
         mobileOpen={mobileMenuOpen}
         onCloseMobile={() => setMobileMenuOpen(false)}
@@ -67,8 +133,8 @@ export default function App() {
           activeSection={activeSection}
           projects={projects}
           selectedProjectId={selectedProjectId}
-          onSelectProject={setSelectedProjectId}
-          onNavigate={setActiveSection}
+          onSelectProject={handleSelectProject}
+          onNavigate={handleSelectSection}
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
         />
 
@@ -79,22 +145,28 @@ export default function App() {
               loading={loadingProjects}
               error={projectsError}
               selectedProjectId={selectedProjectId}
-              onSelectProject={setSelectedProjectId}
+              onSelectProject={handleSelectProject}
               onInspectProject={setInspectProjectId}
-              onNavigate={setActiveSection}
+              onNavigate={handleSelectSection}
               onProjectsChanged={loadProjects}
             />
           ) : activeSection === 'create' ? (
             <CreateAgentPage
               onProjectCreated={handleProjectCreated}
               onProjectsChanged={loadProjects}
-              onNavigate={setActiveSection}
+              onNavigate={handleSelectSection}
+            />
+          ) : activeSection === 'requirements' ? (
+            <RequirementsPage
+              selectedProjectId={selectedProjectId}
+              onNavigate={handleSelectSection}
+              onProjectsChanged={loadProjects}
             />
           ) : (
             <ModulePendingView
               section={activeSection}
               selectedProject={selectedProject}
-              onNavigate={setActiveSection}
+              onNavigate={handleSelectSection}
             />
           )}
         </main>

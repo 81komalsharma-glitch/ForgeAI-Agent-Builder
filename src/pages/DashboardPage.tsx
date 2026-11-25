@@ -313,7 +313,7 @@ export function DashboardPage({
           ForgeAI Workflow Stages
         </h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Stage 1 (project creation and document upload) is active. Subsequent AI generation and evaluation stages will be added step by step.
+          Stages 1 and 2 (Create Agent, Document Processing, Intake Interviewer, and Requirements &amp; Groundability Guard) are active.
         </p>
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
@@ -331,22 +331,22 @@ export function DashboardPage({
           <button
             type="button"
             onClick={() => onNavigate('requirements')}
-            className="text-left p-3.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:border-slate-300 transition-colors"
+            className="text-left p-3.5 rounded-lg border border-slate-200 hover:border-[#1E3A8A] transition-colors"
           >
-            <p className="font-semibold text-slate-800">02. Requirements & Builder</p>
-            <p className="mt-1 text-slate-500">
-              Pending implementation: extract specs and generate agent prompt/tools.
+            <p className="font-semibold text-[#1E3A8A]">02. Requirements (Active)</p>
+            <p className="mt-1 text-slate-600">
+              AI clarification interview, 10-part specification, and groundability guard.
             </p>
           </button>
 
           <button
             type="button"
-            onClick={() => onNavigate('evaluation')}
+            onClick={() => onNavigate('builder')}
             className="text-left p-3.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:border-slate-300 transition-colors"
           >
-            <p className="font-semibold text-slate-800">03. Evaluation & Optimizer</p>
+            <p className="font-semibold text-slate-800">03. Builder &amp; Evaluation</p>
             <p className="mt-1 text-slate-500">
-              Pending implementation: run generated test cases and refine failures.
+              Pending implementation: generate agent prompt/tools and run test cases.
             </p>
           </button>
 
@@ -355,7 +355,7 @@ export function DashboardPage({
             onClick={() => onNavigate('reports')}
             className="text-left p-3.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:border-slate-300 transition-colors"
           >
-            <p className="font-semibold text-slate-800">04. Reports & Agent Chat</p>
+            <p className="font-semibold text-slate-800">04. Reports &amp; Agent Chat</p>
             <p className="mt-1 text-slate-500">
               Pending implementation: final quality summary and live test chat.
             </p>

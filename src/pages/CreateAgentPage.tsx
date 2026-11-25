@@ -34,9 +34,19 @@ const DOMAIN_OPTIONS = [
   'General',
 ];
 
+const TONE_OPTIONS = [
+  'Professional & Concise',
+  'Warm & Helpful',
+  'Formal & Policy-Strict',
+  'Technical & Direct',
+  'Educational & Patient',
+];
+
 const SAMPLE_BRIEF = {
   name: 'Campus Admissions & Scholarship Advisor',
   domain: 'Education & Research',
+  targetAudience: 'Prospective undergraduate applicants and parents',
+  responseTone: 'Warm & Helpful',
   brief:
     'Build an AI assistant for prospective undergraduate applicants. The agent must answer questions about application deadlines, eligibility criteria, required documents, and merit scholarships strictly using the uploaded admissions handbook and fee schedule CSV.\n\nConstraints:\n- Never fabricate scholarship amounts or deadlines not present in the source documents.\n- If a question asks about individual application status or exceptions, direct the student to admissions@university.edu.\n- Keep answers concise, structured, and cite the relevant document section.',
 };
@@ -54,6 +64,8 @@ export function CreateAgentPage({
 }: CreateAgentPageProps) {
   const [name, setName] = useState('');
   const [domain, setDomain] = useState(DOMAIN_OPTIONS[0]);
+  const [targetAudience, setTargetAudience] = useState('');
+  const [responseTone, setResponseTone] = useState(TONE_OPTIONS[0]);
   const [brief, setBrief] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
@@ -113,6 +125,8 @@ export function CreateAgentPage({
   const handleLoadSample = () => {
     setName(SAMPLE_BRIEF.name);
     setDomain(SAMPLE_BRIEF.domain);
+    setTargetAudience(SAMPLE_BRIEF.targetAudience);
+    setResponseTone(SAMPLE_BRIEF.responseTone);
     setBrief(SAMPLE_BRIEF.brief);
     setError(null);
   };
@@ -120,6 +134,8 @@ export function CreateAgentPage({
   const handleReset = () => {
     setName('');
     setDomain(DOMAIN_OPTIONS[0]);
+    setTargetAudience('');
+    setResponseTone(TONE_OPTIONS[0]);
     setBrief('');
     setFiles([]);
     setError(null);
@@ -157,6 +173,8 @@ export function CreateAgentPage({
         {
           name: trimmedName,
           domain,
+          targetAudience: targetAudience.trim(),
+          responseTone,
           brief: trimmedBrief,
           files,
         },
@@ -361,6 +379,47 @@ export function CreateAgentPage({
                 className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-900 focus:outline-none focus:border-[#1E3A8A] focus:ring-2 focus:ring-[#1E3A8A]/15"
               >
                 {DOMAIN_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label
+                htmlFor="target-audience"
+                className="block text-sm font-medium text-slate-800 mb-1.5"
+              >
+                Target Audience
+              </label>
+              <input
+                id="target-audience"
+                type="text"
+                value={targetAudience}
+                onChange={(e) => setTargetAudience(e.target.value)}
+                placeholder="e.g., Internal employees, prospective students"
+                maxLength={140}
+                className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-[#1E3A8A] focus:ring-2 focus:ring-[#1E3A8A]/15"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="response-tone"
+                className="block text-sm font-medium text-slate-800 mb-1.5"
+              >
+                Desired Response Tone
+              </label>
+              <select
+                id="response-tone"
+                value={responseTone}
+                onChange={(e) => setResponseTone(e.target.value)}
+                className="w-full h-10 px-3 rounded-lg border border-slate-200 bg-white text-sm text-slate-900 focus:outline-none focus:border-[#1E3A8A] focus:ring-2 focus:ring-[#1E3A8A]/15"
+              >
+                {TONE_OPTIONS.map((option) => (
                   <option key={option} value={option}>
                     {option}
                   </option>
@@ -727,8 +786,15 @@ export function CreateAgentPage({
               <div className="pt-2 flex flex-wrap items-center gap-2 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => onNavigate('dashboard')}
+                  onClick={() => onNavigate('requirements')}
                   className="px-3.5 py-2 rounded-lg bg-[#1E3A8A] text-white text-xs font-medium hover:bg-[#1E40AF] transition-colors"
+                >
+                  Start Intake Interview
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('dashboard')}
+                  className="px-3.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                 >
                   View on Dashboard
                 </button>
