@@ -7,6 +7,7 @@ import { AgentBuilderPage } from './pages/AgentBuilderPage';
 import { CreateAgentPage } from './pages/CreateAgentPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { EvaluationPage } from './pages/EvaluationPage';
+import { OptimizerPage } from './pages/OptimizerPage';
 import { RequirementsPage } from './pages/RequirementsPage';
 import { fetchProjects } from './services/api';
 import type { AgentProject, NavSectionId, ProjectSummary } from './types/agent';
@@ -172,6 +173,12 @@ export default function App() {
             />
           ) : activeSection === 'evaluation' ? (
             <EvaluationPage
+              selectedProjectId={selectedProjectId}
+              onNavigate={handleSelectSection}
+              onProjectsChanged={loadProjects}
+            />
+          ) : activeSection === 'optimizer' ? (
+            <OptimizerPage
               selectedProjectId={selectedProjectId}
               onNavigate={handleSelectSection}
               onProjectsChanged={loadProjects}

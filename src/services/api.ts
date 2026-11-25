@@ -9,6 +9,7 @@ import type {
   EvaluationTestCaseResult,
   EvaluationValidationResult,
   HealthStatus,
+  OptimizationRunRecord,
   ProjectSummary,
   StoredDocument,
 } from '../types/agent';
@@ -486,6 +487,127 @@ export async function skipEvaluationTestCase(
   return handleResponse<{
     project: AgentProject;
     run: EvaluationRunRecord;
+  }>(res);
+}
+
+export async function createOptimizationRun(
+  projectId: string,
+  evaluationRunId?: string
+): Promise<{
+  project: AgentProject;
+  optimizationRun: OptimizationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/optimizer/runs`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(evaluationRunId ? { evaluationRunId } : {}),
+    }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    optimizationRun: OptimizationRunRecord;
+  }>(res);
+}
+
+export async function analyzeOptimizationFailures(
+  projectId: string,
+  optId: string
+): Promise<{
+  project: AgentProject;
+  optimizationRun: OptimizationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/optimizer/runs/${encodeURIComponent(optId)}/analyze`,
+    { method: 'POST' }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    optimizationRun: OptimizationRunRecord;
+  }>(res);
+}
+
+export async function submitOptimizationDecisions(
+  projectId: string,
+  optId: string,
+  iterationNumber: number,
+  decisions: Array<{ changeId: string; status: 'approved' | 'rejected' }>
+): Promise<{
+  project: AgentProject;
+  optimizationRun: OptimizationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/optimizer/runs/${encodeURIComponent(optId)}/iterations/${iterationNumber}/decisions`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decisions }),
+    }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    optimizationRun: OptimizationRunRecord;
+  }>(res);
+}
+
+export async function applyOptimizationIteration(
+  projectId: string,
+  optId: string,
+  iterationNumber: number
+): Promise<{
+  project: AgentProject;
+  optimizationRun: OptimizationRunRecord;
+  evaluationRun: EvaluationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/optimizer/runs/${encodeURIComponent(optId)}/iterations/${iterationNumber}/apply`,
+    { method: 'POST' }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    optimizationRun: OptimizationRunRecord;
+    evaluationRun: EvaluationRunRecord;
+  }>(res);
+}
+
+export async function finalizeOptimizationIteration(
+  projectId: string,
+  optId: string,
+  iterationNumber: number
+): Promise<{
+  project: AgentProject;
+  optimizationRun: OptimizationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/optimizer/runs/${encodeURIComponent(optId)}/iterations/${iterationNumber}/finalize`,
+    { method: 'POST' }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    optimizationRun: OptimizationRunRecord;
+  }>(res);
+}
+
+export async function stopOptimizationRun(
+  projectId: string,
+  optId: string,
+  reason?: string
+): Promise<{
+  project: AgentProject;
+  optimizationRun: OptimizationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/optimizer/runs/${encodeURIComponent(optId)}/stop`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(reason ? { reason } : {}),
+    }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    optimizationRun: OptimizationRunRecord;
   }>(res);
 }
 

@@ -318,10 +318,10 @@ export function DashboardPage({
           ForgeAI Workflow Stages
         </h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Stages 1–4 (Create Agent, Requirements &amp; Groundability Guard, Agent Builder, and Evaluation Runner &amp; AI Judge) are active.
+          Stages 1–5 (Create Agent, Requirements &amp; Groundability Guard, Agent Builder, Evaluation Runner &amp; AI Judge, and Critic-Optimizer) are active.
         </p>
 
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
           <button
             type="button"
             onClick={() => onNavigate('create')}
@@ -363,6 +363,17 @@ export function DashboardPage({
             <p className="font-semibold text-[#1E3A8A]">04. Evaluation (Active)</p>
             <p className="mt-1 text-slate-600">
               Generate, run, and independently judge 20+ grounded test cases.
+            </p>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onNavigate('optimizer')}
+            className="text-left p-3.5 rounded-lg border border-slate-200 hover:border-[#1E3A8A] transition-colors"
+          >
+            <p className="font-semibold text-[#1E3A8A]">05. Optimizer (Active)</p>
+            <p className="mt-1 text-slate-600">
+              Classify failures, approve targeted fixes, and rerun up to 3 iterations.
             </p>
           </button>
         </div>

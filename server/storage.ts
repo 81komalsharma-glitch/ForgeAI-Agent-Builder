@@ -9,6 +9,8 @@ import type {
   EvaluationRunRecord,
   EvaluationState,
   IntakeInterviewState,
+  OptimizationRunRecord,
+  OptimizationState,
   PipelineStage,
   ProjectSummary,
   StoredDocument,
@@ -62,6 +64,10 @@ function normalizeProjectRecord(raw: AgentProject): AgentProject {
     agentConfig: raw.agentConfig ?? null,
     evaluation: raw.evaluation ?? null,
     evaluationRuns: Array.isArray(raw.evaluationRuns) ? raw.evaluationRuns : [],
+    optimization:
+      raw.optimization && Array.isArray(raw.optimization.runs)
+        ? raw.optimization
+        : null,
   };
 }
 
@@ -82,6 +88,9 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
 
   const runs = project.evaluationRuns;
   const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
+
+  const optRuns = project.optimization?.runs ?? [];
+  const latestOptRun = optRuns.length > 0 ? optRuns[optRuns.length - 1] : null;
 
   return {
     id: project.id,
@@ -109,6 +118,13 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
     evaluationRunCount: runs.length,
     latestEvaluationRunScore: latestRun?.scorecard?.overallScore ?? null,
     latestEvaluationRunStatus: latestRun?.status ?? null,
+    optimizationRunCount: optRuns.length,
+    latestOptimizationScore: latestOptRun?.currentScorecard?.overallScore ?? null,
+    latestOptimizationBaselineScore:
+      latestOptRun?.baselineScorecard?.overallScore ?? null,
+    optimizationIterationsCompleted: latestOptRun
+      ? latestOptRun.iterations.filter((it) => it.status === 'completed').length
+      : 0,
   };
 }
 
@@ -365,6 +381,60 @@ export async function saveProjectEvaluationRun(
   if (stage) {
     project.stage = stage;
   }
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
+}
+
+export async function saveProjectOptimizationRun(
+  projectId: string,
+  optRun: OptimizationRunRecord,
+  options?: {
+    agentConfig?: AgentBuilderState;
+    newEvaluationRun?: EvaluationRunRecord;
+    stage?: PipelineStage;
+  }
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  const currentOpt: OptimizationState = project.optimization ?? {
+    runs: [],
+    activeOptimizationRunId: null,
+  };
+
+  const existingIndex = currentOpt.runs.findIndex(
+    (r) => r.optimizationRunId === optRun.optimizationRunId
+  );
+  const nextRuns = [...currentOpt.runs];
+  if (existingIndex >= 0) {
+    nextRuns[existingIndex] = optRun;
+  } else {
+    nextRuns.push(optRun);
+  }
+
+  project.optimization = {
+    runs: nextRuns,
+    activeOptimizationRunId: optRun.optimizationRunId,
+  };
+
+  if (options?.agentConfig) {
+    project.agentConfig = options.agentConfig;
+  }
+  if (options?.newEvaluationRun) {
+    const evalIdx = project.evaluationRuns.findIndex(
+      (r) => r.runId === options.newEvaluationRun!.runId
+    );
+    if (evalIdx >= 0) {
+      project.evaluationRuns[evalIdx] = options.newEvaluationRun;
+    } else {
+      project.evaluationRuns.push(options.newEvaluationRun);
+    }
+  }
+  if (options?.stage) {
+    project.stage = options.stage;
+  }
+
   project.updatedAt = new Date().toISOString();
   await saveProjectRecord(project);
   return project;

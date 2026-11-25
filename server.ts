@@ -36,6 +36,14 @@ import {
   skipTestCaseInRun,
 } from './server/evaluationRunner.ts';
 import {
+  analyzeFailuresAndProposeFixes,
+  applyApprovedChangesAndPrepareRerun,
+  createOptimizationRunRecord,
+  finalizeOptimizationIteration,
+  stopOptimizationRun,
+  updateIterationChangeDecisions,
+} from './server/optimizer.ts';
+import {
   addDocumentsToProject,
   createProject,
   deleteProject,
@@ -50,6 +58,7 @@ import {
   saveProjectEvaluation,
   saveProjectEvaluationRun,
   saveProjectIntakeInterview,
+  saveProjectOptimizationRun,
   saveProjectRequirements,
   type IncomingUploadedFile,
 } from './server/storage.ts';
@@ -1186,6 +1195,274 @@ async function startServer(): Promise<void> {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to export evaluation run.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Start a new Critic-Optimizer run from a completed evaluation run
+  app.post('/api/projects/:id/optimizer/runs', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const preferredEvalRunId =
+        typeof req.body?.evaluationRunId === 'string' && req.body.evaluationRunId.trim()
+          ? req.body.evaluationRunId.trim()
+          : undefined;
+
+      const optRun = createOptimizationRunRecord(project, preferredEvalRunId);
+      const updated = await saveProjectOptimizationRun(project.id, optRun);
+      res.status(201).json({ project: updated, optimizationRun: optRun });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to start optimization run.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Step 1-3 of iteration: Analyze failures, classify root causes, and propose targeted fixes
+  app.post('/api/projects/:id/optimizer/runs/:optId/analyze', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const existingOpt = project.optimization?.runs.find(
+        (r) => r.optimizationRunId === req.params.optId
+      );
+      if (!existingOpt) {
+        res.status(404).json({ error: 'Optimization run not found.' });
+        return;
+      }
+
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error:
+            'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const updatedOptRun = await analyzeFailuresAndProposeFixes(project, existingOpt);
+      const updated = await saveProjectOptimizationRun(project.id, updatedOptRun);
+      res.json({ project: updated, optimizationRun: updatedOptRun });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to analyze failures.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 400;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Step 5 of iteration: Approve or reject proposed targeted fixes
+  app.post(
+    '/api/projects/:id/optimizer/runs/:optId/iterations/:iterNum/decisions',
+    async (req, res) => {
+      try {
+        const project = await getProjectById(req.params.id);
+        if (!project) {
+          res.status(404).json({ error: 'Project not found.' });
+          return;
+        }
+        const existingOpt = project.optimization?.runs.find(
+          (r) => r.optimizationRunId === req.params.optId
+        );
+        if (!existingOpt) {
+          res.status(404).json({ error: 'Optimization run not found.' });
+          return;
+        }
+
+        const iterNum = Number(req.params.iterNum);
+        const decisions = Array.isArray(req.body?.decisions)
+          ? req.body.decisions
+          : [];
+        if (!Number.isInteger(iterNum) || decisions.length === 0) {
+          res.status(400).json({
+            error: 'Valid iteration number and non-empty decisions array are required.',
+          });
+          return;
+        }
+
+        const updatedOptRun = updateIterationChangeDecisions(
+          existingOpt,
+          iterNum,
+          decisions
+        );
+        const updated = await saveProjectOptimizationRun(project.id, updatedOptRun);
+        res.json({ project: updated, optimizationRun: updatedOptRun });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : 'Failed to record fix decisions.';
+        res.status(400).json({ error: message });
+      }
+    }
+  );
+
+  // Step 6-7 of iteration: Apply approved surgical patches to a new Agent version & prepare unchanged dataset rerun
+  app.post(
+    '/api/projects/:id/optimizer/runs/:optId/iterations/:iterNum/apply',
+    async (req, res) => {
+      try {
+        const project = await getProjectById(req.params.id);
+        if (!project) {
+          res.status(404).json({ error: 'Project not found.' });
+          return;
+        }
+        const existingOpt = project.optimization?.runs.find(
+          (r) => r.optimizationRunId === req.params.optId
+        );
+        if (!existingOpt) {
+          res.status(404).json({ error: 'Optimization run not found.' });
+          return;
+        }
+        if (!isGeminiConfigured()) {
+          res.status(503).json({
+            error:
+              'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+          });
+          return;
+        }
+
+        const iterNum = Number(req.params.iterNum);
+        if (!Number.isInteger(iterNum)) {
+          res.status(400).json({ error: 'Invalid iteration number.' });
+          return;
+        }
+
+        const { updatedOptRun, updatedAgentConfig, newEvalRun } =
+          applyApprovedChangesAndPrepareRerun(project, existingOpt, iterNum);
+
+        const updated = await saveProjectOptimizationRun(project.id, updatedOptRun, {
+          agentConfig: updatedAgentConfig,
+          newEvaluationRun: newEvalRun,
+        });
+
+        res.json({
+          project: updated,
+          optimizationRun: updatedOptRun,
+          evaluationRun: newEvalRun,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to apply optimization changes.';
+        res.status(400).json({ error: message });
+      }
+    }
+  );
+
+  // Step 8-10 of iteration: Finalize completed rerun scorecard, compute delta, and apply stopping rules
+  app.post(
+    '/api/projects/:id/optimizer/runs/:optId/iterations/:iterNum/finalize',
+    async (req, res) => {
+      try {
+        const project = await getProjectById(req.params.id);
+        if (!project) {
+          res.status(404).json({ error: 'Project not found.' });
+          return;
+        }
+        const existingOpt = project.optimization?.runs.find(
+          (r) => r.optimizationRunId === req.params.optId
+        );
+        if (!existingOpt) {
+          res.status(404).json({ error: 'Optimization run not found.' });
+          return;
+        }
+
+        const iterNum = Number(req.params.iterNum);
+        if (!Number.isInteger(iterNum)) {
+          res.status(400).json({ error: 'Invalid iteration number.' });
+          return;
+        }
+
+        const updatedOptRun = finalizeOptimizationIteration(
+          project,
+          existingOpt,
+          iterNum
+        );
+        const latestIter = updatedOptRun.iterations.find(
+          (it) => it.iterationNumber === iterNum
+        );
+        const improved =
+          latestIter?.scoreDelta?.overall !== null &&
+          latestIter?.scoreDelta?.overall !== undefined &&
+          latestIter.scoreDelta.overall > 0;
+
+        const updated = await saveProjectOptimizationRun(project.id, updatedOptRun, {
+          stage: improved || project.stage === 'evaluated' ? 'optimized' : undefined,
+        });
+
+        res.json({ project: updated, optimizationRun: updatedOptRun });
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to finalize optimization iteration.';
+        res.status(400).json({ error: message });
+      }
+    }
+  );
+
+  // Manually stop optimization without losing previous iterations or versions
+  app.post('/api/projects/:id/optimizer/runs/:optId/stop', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      const existingOpt = project.optimization?.runs.find(
+        (r) => r.optimizationRunId === req.params.optId
+      );
+      if (!existingOpt) {
+        res.status(404).json({ error: 'Optimization run not found.' });
+        return;
+      }
+
+      const reason =
+        typeof req.body?.reason === 'string' && req.body.reason.trim()
+          ? req.body.reason.trim()
+          : 'Stopped manually by user.';
+      const stoppedRun = stopOptimizationRun(existingOpt, reason);
+      const updated = await saveProjectOptimizationRun(project.id, stoppedRun);
+      res.json({ project: updated, optimizationRun: stoppedRun });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to stop optimization run.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Export optimization run JSON report
+  app.get('/api/projects/:id/optimizer/runs/:optId/export', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      const optRun = project.optimization?.runs.find(
+        (r) => r.optimizationRunId === req.params.optId
+      );
+      if (!optRun) {
+        res.status(404).json({ error: 'Optimization run not found.' });
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="forgeai-optimizer-${optRun.optimizationRunId}.json"`
+      );
+      res.send(JSON.stringify(optRun, null, 2));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to export optimization run.';
       res.status(400).json({ error: message });
     }
   });

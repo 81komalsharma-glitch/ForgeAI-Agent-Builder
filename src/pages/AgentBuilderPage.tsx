@@ -115,7 +115,9 @@ export function AgentBuilderPage({
       setRawJsonText(JSON.stringify(record.definition, null, 2));
       setJsonSyntaxError(null);
       setValidation(record.validation);
-      setEditSource(record.source);
+      setEditSource(
+        record.source === 'optimized' ? 'manual_edit' : record.source
+      );
       setHasUnsavedChanges(false);
     },
     []
