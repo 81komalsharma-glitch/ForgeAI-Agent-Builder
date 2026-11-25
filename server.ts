@@ -29,6 +29,13 @@ import {
   generateStructuredRequirementsAndGroundability,
 } from './server/requirements.ts';
 import {
+  assertEvaluationRunnerPrerequisites,
+  computeEvaluationScorecard,
+  createEvaluationRunRecord,
+  executeNextTestCaseInRun,
+  skipTestCaseInRun,
+} from './server/evaluationRunner.ts';
+import {
   addDocumentsToProject,
   createProject,
   deleteProject,
@@ -41,6 +48,7 @@ import {
   removeDocumentFromProject,
   saveProjectAgentConfig,
   saveProjectEvaluation,
+  saveProjectEvaluationRun,
   saveProjectIntakeInterview,
   saveProjectRequirements,
   type IncomingUploadedFile,
@@ -958,6 +966,226 @@ async function startServer(): Promise<void> {
         error instanceof Error
           ? error.message
           : 'Failed to save evaluation dataset.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Create a new persistent Evaluation Run for the saved agent & saved evaluation dataset
+  app.post('/api/projects/:id/evaluation/runs', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      let savedAgent;
+      let savedDataset;
+      try {
+        const prereqs = assertEvaluationRunnerPrerequisites(project);
+        savedAgent = prereqs.savedAgent;
+        savedDataset = prereqs.savedDataset;
+      } catch (prereqError) {
+        res.status(400).json({
+          error:
+            prereqError instanceof Error
+              ? prereqError.message
+              : 'Evaluation run prerequisites are not met.',
+        });
+        return;
+      }
+
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error:
+            'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const runRecord = createEvaluationRunRecord(
+        project,
+        savedAgent,
+        savedDataset
+      );
+      const updated = await saveProjectEvaluationRun(project.id, runRecord);
+      res.status(201).json({ project: updated, run: runRecord });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to create evaluation run.';
+      res.status(500).json({ error: message });
+    }
+  });
+
+  // Execute the next pending test case (or retry a specific testCaseId) sequentially
+  app.post('/api/projects/:id/evaluation/runs/:runId/step', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const existingRun = project.evaluationRuns.find(
+        (r) => r.runId === req.params.runId
+      );
+      if (!existingRun) {
+        res.status(404).json({ error: 'Evaluation run not found.' });
+        return;
+      }
+
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error:
+            'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const targetTestCaseId =
+        typeof req.body?.testCaseId === 'string' && req.body.testCaseId.trim()
+          ? req.body.testCaseId.trim()
+          : undefined;
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      const { runRecord, executedResult, done } = await executeNextTestCaseInRun(
+        project,
+        extractedDocs,
+        existingRun,
+        { targetTestCaseId }
+      );
+
+      const nextStage =
+        done && runRecord.scorecard.counts.evaluatedTests > 0 && project.stage === 'agent_built'
+          ? 'evaluated'
+          : undefined;
+
+      const updated = await saveProjectEvaluationRun(
+        project.id,
+        runRecord,
+        nextStage
+      );
+
+      res.json({
+        project: updated,
+        run: runRecord,
+        executedResult,
+        done,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to execute evaluation step.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 400;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Pause an in-progress evaluation run without losing completed results
+  app.post('/api/projects/:id/evaluation/runs/:runId/pause', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      const existingRun = project.evaluationRuns.find(
+        (r) => r.runId === req.params.runId
+      );
+      if (!existingRun) {
+        res.status(404).json({ error: 'Evaluation run not found.' });
+        return;
+      }
+
+      const nextStatus =
+        existingRun.status === 'running' ? 'paused' : existingRun.status;
+      const updatedRun = {
+        ...existingRun,
+        status: nextStatus,
+        updatedAt: new Date().toISOString(),
+        scorecard: computeEvaluationScorecard(
+          existingRun.testCasesSnapshot,
+          existingRun.results
+        ),
+      };
+
+      const updated = await saveProjectEvaluationRun(project.id, updatedRun);
+      res.json({ project: updated, run: updatedRun });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to pause evaluation run.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Mark an errored or pending test case as skipped so a run can proceed/finalize cleanly
+  app.post('/api/projects/:id/evaluation/runs/:runId/skip', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      const existingRun = project.evaluationRuns.find(
+        (r) => r.runId === req.params.runId
+      );
+      if (!existingRun) {
+        res.status(404).json({ error: 'Evaluation run not found.' });
+        return;
+      }
+
+      const testCaseId =
+        typeof req.body?.testCaseId === 'string' && req.body.testCaseId.trim()
+          ? req.body.testCaseId.trim()
+          : existingRun.currentTestCaseId ?? '';
+      const reason =
+        typeof req.body?.reason === 'string' && req.body.reason.trim()
+          ? req.body.reason.trim()
+          : undefined;
+
+      const updatedRun = skipTestCaseInRun(existingRun, testCaseId, reason);
+      const nextStage =
+        (updatedRun.status === 'completed' ||
+          updatedRun.status === 'completed_with_errors') &&
+        updatedRun.scorecard.counts.evaluatedTests > 0 &&
+        project.stage === 'agent_built'
+          ? 'evaluated'
+          : undefined;
+
+      const updated = await saveProjectEvaluationRun(
+        project.id,
+        updatedRun,
+        nextStage
+      );
+      res.json({ project: updated, run: updatedRun });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to skip test case.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Export a saved evaluation run JSON (including scorecard & individual judge reasoning)
+  app.get('/api/projects/:id/evaluation/runs/:runId/export', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      const run = project.evaluationRuns.find((r) => r.runId === req.params.runId);
+      if (!run) {
+        res.status(404).json({ error: 'Evaluation run not found.' });
+        return;
+      }
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="forgeai-eval-${run.runId}.json"`
+      );
+      res.send(JSON.stringify(run, null, 2));
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to export evaluation run.';
       res.status(400).json({ error: message });
     }
   });

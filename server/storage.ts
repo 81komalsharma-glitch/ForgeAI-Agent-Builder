@@ -6,6 +6,7 @@ import type {
   AgentBuilderState,
   AgentProject,
   AgentRequirements,
+  EvaluationRunRecord,
   EvaluationState,
   IntakeInterviewState,
   PipelineStage,
@@ -60,6 +61,7 @@ function normalizeProjectRecord(raw: AgentProject): AgentProject {
     requirements: raw.requirements ?? null,
     agentConfig: raw.agentConfig ?? null,
     evaluation: raw.evaluation ?? null,
+    evaluationRuns: Array.isArray(raw.evaluationRuns) ? raw.evaluationRuns : [],
   };
 }
 
@@ -77,6 +79,9 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
     evalSavedVer !== null
       ? project.evaluation?.versions.find((v) => v.version === evalSavedVer) ?? null
       : null;
+
+  const runs = project.evaluationRuns;
+  const latestRun = runs.length > 0 ? runs[runs.length - 1] : null;
 
   return {
     id: project.id,
@@ -101,6 +106,9 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
     evaluationSavedVersion: evalSavedVer,
     evaluationValid: Boolean(evalSavedRecord?.validation.valid),
     evaluationTestCaseCount: evalSavedRecord?.testCases.length ?? 0,
+    evaluationRunCount: runs.length,
+    latestEvaluationRunScore: latestRun?.scorecard?.overallScore ?? null,
+    latestEvaluationRunStatus: latestRun?.status ?? null,
   };
 }
 
@@ -261,6 +269,7 @@ export async function createProject(input: {
       requirements: null,
       agentConfig: null,
       evaluation: null,
+      evaluationRuns: [],
       optimization: null,
       report: null,
     };
@@ -329,6 +338,30 @@ export async function saveProjectEvaluation(
   if (!project) return null;
 
   project.evaluation = evaluation;
+  if (stage) {
+    project.stage = stage;
+  }
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
+}
+
+export async function saveProjectEvaluationRun(
+  projectId: string,
+  runRecord: EvaluationRunRecord,
+  stage?: PipelineStage
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  const existingIndex = project.evaluationRuns.findIndex(
+    (item) => item.runId === runRecord.runId
+  );
+  if (existingIndex >= 0) {
+    project.evaluationRuns[existingIndex] = runRecord;
+  } else {
+    project.evaluationRuns.push(runRecord);
+  }
   if (stage) {
     project.stage = stage;
   }

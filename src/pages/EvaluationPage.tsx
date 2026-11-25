@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
+  BarChart3,
   BookOpen,
   CheckCircle2,
   ChevronDown,
@@ -24,13 +25,18 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { EvaluationResultsPanel } from '../components/evaluation/EvaluationResultsPanel';
 import {
   ApiValidationError,
+  createEvaluationRun,
+  executeEvaluationRunStep,
   fetchEvaluationPrompts,
   fetchProjectById,
   generateEvaluationDataset,
+  pauseEvaluationRun,
   regenerateEvaluationTestCase,
   saveEvaluationDataset,
+  skipEvaluationTestCase,
   validateEvaluationDataset,
 } from '../services/api';
 import type {
@@ -39,6 +45,7 @@ import type {
   EvaluationDatasetVersion,
   EvaluationDifficulty,
   EvaluationPromptTemplateMeta,
+  EvaluationRunRecord,
   EvaluationTestCase,
   EvaluationValidationResult,
   NavSectionId,
@@ -79,7 +86,16 @@ export function EvaluationPage({
   const [loadingProject, setLoadingProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [runEvalMessage, setRunEvalMessage] = useState<string | null>(null);
+
+  const [activeViewTab, setActiveViewTab] = useState<'dataset' | 'results'>('dataset');
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [runningEval, setRunningEval] = useState(false);
+  const [activeExecutingCaseId, setActiveExecutingCaseId] = useState<string | null>(
+    null
+  );
+  const [runExecError, setRunExecError] = useState<string | null>(null);
+  const pauseRequestedRef = useRef(false);
+  const unmountedRef = useRef(false);
 
   const [selectedDatasetVersion, setSelectedDatasetVersion] = useState<number | null>(
     null
@@ -124,6 +140,14 @@ export function EvaluationPage({
   const [promptVersion, setPromptVersion] = useState<string>('');
   const [loadingPrompts, setLoadingPrompts] = useState(false);
 
+  useEffect(() => {
+    unmountedRef.current = false;
+    return () => {
+      unmountedRef.current = true;
+      pauseRequestedRef.current = true;
+    };
+  }, []);
+
   const hydrateFromVersion = useCallback(
     (record: EvaluationDatasetVersion | null) => {
       if (!record) {
@@ -160,7 +184,7 @@ export function EvaluationPage({
       setLoadingProject(true);
       setError(null);
       setNotice(null);
-      setRunEvalMessage(null);
+      setRunExecError(null);
       try {
         const full = await fetchProjectById(projectId);
         setProject(full);
@@ -174,10 +198,23 @@ export function EvaluationPage({
           versions[versions.length - 1] ??
           null;
         hydrateFromVersion(found);
+
+        const runs = full.evaluationRuns ?? [];
+        const latestRun = runs[runs.length - 1] ?? null;
+        setSelectedRunId(latestRun?.runId ?? null);
+        if (
+          latestRun &&
+          (latestRun.status === 'running' || latestRun.status === 'paused')
+        ) {
+          setActiveViewTab('results');
+        } else {
+          setActiveViewTab('dataset');
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load project.');
         setProject(null);
         hydrateFromVersion(null);
+        setSelectedRunId(null);
       } finally {
         setLoadingProject(false);
       }
@@ -189,8 +226,12 @@ export function EvaluationPage({
     if (!selectedProjectId) {
       setProject(null);
       hydrateFromVersion(null);
+      setSelectedRunId(null);
       return;
     }
+    pauseRequestedRef.current = true;
+    setRunningEval(false);
+    setActiveExecutingCaseId(null);
     void loadProject(selectedProjectId);
   }, [selectedProjectId, loadProject, hydrateFromVersion]);
 
@@ -309,7 +350,6 @@ export function EvaluationPage({
     setGenerating(true);
     setError(null);
     setNotice(null);
-    setRunEvalMessage(null);
     try {
       const updated = await generateEvaluationDataset(project.id);
       setProject(updated);
@@ -338,7 +378,6 @@ export function EvaluationPage({
     setRegeneratingId(targetId);
     setError(null);
     setNotice(null);
-    setRunEvalMessage(null);
     try {
       const result = await regenerateEvaluationTestCase(project.id, {
         testCaseId: targetId,
@@ -373,7 +412,6 @@ export function EvaluationPage({
     setWorkingCases(nextCases);
     setEditSource('manual_edit');
     setHasUnsavedChanges(true);
-    setRunEvalMessage(null);
     if (selectedCaseId === targetId) {
       setSelectedCaseId(nextCases[0]?.id ?? null);
     }
@@ -427,7 +465,6 @@ export function EvaluationPage({
     setEditDraft(null);
     setEditSource('manual_edit');
     setHasUnsavedChanges(true);
-    setRunEvalMessage(null);
     await runServerValidation(nextCases, false);
   };
 
@@ -457,7 +494,6 @@ export function EvaluationPage({
     setEditDraft(newCase);
     setEditSource('manual_edit');
     setHasUnsavedChanges(true);
-    setRunEvalMessage(null);
   };
 
   const handleSaveEvaluationSet = async () => {
@@ -556,7 +592,163 @@ export function EvaluationPage({
       hydrateFromVersion(found);
       setNotice(`Loaded evaluation dataset v${found.version}.`);
       setError(null);
-      setRunEvalMessage(null);
+    }
+  };
+
+  const runSequentialLoop = async (
+    projectId: string,
+    initialRun: EvaluationRunRecord
+  ) => {
+    pauseRequestedRef.current = false;
+    setRunningEval(true);
+    setRunExecError(null);
+    let currentRun = initialRun;
+
+    try {
+      while (!pauseRequestedRef.current && !unmountedRef.current) {
+        if (currentRun.scorecard.counts.pendingTests <= 0) {
+          break;
+        }
+        setActiveExecutingCaseId(currentRun.currentTestCaseId);
+        const stepRes = await executeEvaluationRunStep(
+          projectId,
+          currentRun.runId
+        );
+        if (unmountedRef.current) return;
+
+        setProject(stepRes.project);
+        currentRun = stepRes.run;
+        setSelectedRunId(stepRes.run.runId);
+
+        if (stepRes.done) {
+          onProjectsChanged();
+          const finalScore = stepRes.run.scorecard.overallScore;
+          setNotice(
+            finalScore !== null
+              ? `Evaluation run ${stepRes.run.runId} finished: Overall Score ${finalScore.toFixed(1)}% (${stepRes.run.scorecard.counts.passedTests} passed, ${stepRes.run.scorecard.counts.failedTests} failed, ${stepRes.run.scorecard.counts.errorTests} errors).`
+              : `Evaluation run ${stepRes.run.runId} finished with ${stepRes.run.scorecard.counts.errorTests} execution error(s).`
+          );
+          break;
+        }
+      }
+
+      if (
+        pauseRequestedRef.current &&
+        !unmountedRef.current &&
+        currentRun.scorecard.counts.pendingTests > 0
+      ) {
+        const pausedRes = await pauseEvaluationRun(projectId, currentRun.runId);
+        if (!unmountedRef.current) {
+          setProject(pausedRes.project);
+          setSelectedRunId(pausedRes.run.runId);
+          setNotice(
+            `Evaluation run ${pausedRes.run.runId} paused with ${pausedRes.run.scorecard.counts.pendingTests} pending test(s). Click Resume Evaluation to continue.`
+          );
+        }
+      }
+    } catch (err) {
+      if (!unmountedRef.current) {
+        const msg =
+          err instanceof Error
+            ? err.message
+            : 'Evaluation execution stopped due to an error.';
+        setRunExecError(msg);
+        try {
+          await pauseEvaluationRun(projectId, currentRun.runId);
+          const refreshed = await fetchProjectById(projectId);
+          setProject(refreshed);
+        } catch {
+          // Best-effort refresh on failure
+        }
+      }
+    } finally {
+      if (!unmountedRef.current) {
+        setRunningEval(false);
+        setActiveExecutingCaseId(null);
+      }
+    }
+  };
+
+  const handleStartNewEvaluationRun = async () => {
+    if (!project || runningEval) return;
+    setError(null);
+    setNotice(null);
+    setRunExecError(null);
+    setActiveViewTab('results');
+    try {
+      const created = await createEvaluationRun(project.id);
+      setProject(created.project);
+      setSelectedRunId(created.run.runId);
+      onProjectsChanged();
+      await runSequentialLoop(project.id, created.run);
+    } catch (err) {
+      setRunExecError(
+        err instanceof Error ? err.message : 'Failed to start evaluation run.'
+      );
+    }
+  };
+
+  const handleResumeEvaluationRun = async (runId: string) => {
+    if (!project || runningEval) return;
+    const targetRun = project.evaluationRuns.find((r) => r.runId === runId);
+    if (!targetRun) return;
+    setError(null);
+    setNotice(null);
+    setRunExecError(null);
+    setActiveViewTab('results');
+    await runSequentialLoop(project.id, targetRun);
+  };
+
+  const handlePauseEvaluationRun = async (runId: string) => {
+    if (!project) return;
+    pauseRequestedRef.current = true;
+    try {
+      const res = await pauseEvaluationRun(project.id, runId);
+      setProject(res.project);
+    } catch {
+      // Loop handler will persist pause as well
+    }
+  };
+
+  const handleRetryTestCase = async (runId: string, testCaseId: string) => {
+    if (!project || runningEval) return;
+    setRunningEval(true);
+    setActiveExecutingCaseId(testCaseId);
+    setRunExecError(null);
+    try {
+      const res = await executeEvaluationRunStep(project.id, runId, testCaseId);
+      setProject(res.project);
+      setSelectedRunId(res.run.runId);
+      onProjectsChanged();
+      setNotice(`Re-evaluated test case ${testCaseId}.`);
+    } catch (err) {
+      setRunExecError(
+        err instanceof Error ? err.message : `Failed to retry ${testCaseId}.`
+      );
+    } finally {
+      setRunningEval(false);
+      setActiveExecutingCaseId(null);
+    }
+  };
+
+  const handleSkipTestCase = async (runId: string, testCaseId: string) => {
+    if (!project || runningEval) return;
+    setRunExecError(null);
+    try {
+      const res = await skipEvaluationTestCase(
+        project.id,
+        runId,
+        testCaseId,
+        'Skipped manually by user from Evaluation dashboard.'
+      );
+      setProject(res.project);
+      setSelectedRunId(res.run.runId);
+      onProjectsChanged();
+      setNotice(`Marked test case ${testCaseId} as skipped.`);
+    } catch (err) {
+      setRunExecError(
+        err instanceof Error ? err.message : `Failed to skip ${testCaseId}.`
+      );
     }
   };
 
@@ -760,21 +952,21 @@ export function EvaluationPage({
 
             <button
               type="button"
-              disabled={!canRunEvaluation}
-              onClick={() => {
-                setRunEvalMessage(
-                  `Evaluation Dataset v${savedEvalVer} (${workingCases.length} validated test cases) is saved and verified. Live agent scoring and failure optimization are handled in Stage 05 (Optimizer).`
-                );
-              }}
+              disabled={!canRunEvaluation || runningEval}
+              onClick={() => void handleStartNewEvaluationRun()}
               title={
                 canRunEvaluation
-                  ? 'Run evaluation against the saved test set'
+                  ? 'Run evaluation sequentially against the saved test set'
                   : 'Save a valid evaluation dataset with at least 20 test cases before running evaluation'
               }
               className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700 text-white text-xs font-medium hover:bg-emerald-800 disabled:bg-slate-200 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors"
             >
-              <Play className="w-3.5 h-3.5" aria-hidden="true" />
-              <span>Run Evaluation</span>
+              {runningEval ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Play className="w-3.5 h-3.5" aria-hidden="true" />
+              )}
+              <span>{runningEval ? 'Running Evaluation...' : 'Run Evaluation'}</span>
             </button>
           </div>
         </div>
@@ -851,6 +1043,59 @@ export function EvaluationPage({
         )}
       </div>
 
+      {/* Segmented Workspace Tabs: Dataset vs Evaluation Runs & Results */}
+      <div className="bg-white border border-slate-200 rounded-xl p-2 flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5" role="tablist" aria-label="Evaluation workspace views">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeViewTab === 'dataset'}
+            onClick={() => setActiveViewTab('dataset')}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium transition-colors ${
+              activeViewTab === 'dataset'
+                ? 'bg-[#1E3A8A] text-white'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <FlaskConical className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>
+              Test Dataset ({workingCases.length} cases
+              {savedEvalVer !== null ? ` · v${savedEvalVer}` : ''})
+            </span>
+          </button>
+
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeViewTab === 'results'}
+            onClick={() => setActiveViewTab('results')}
+            className={`inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium transition-colors ${
+              activeViewTab === 'results'
+                ? 'bg-[#1E3A8A] text-white'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            <BarChart3 className="w-3.5 h-3.5" aria-hidden="true" />
+            <span>
+              Evaluation Runs &amp; Results ({project.evaluationRuns?.length ?? 0})
+            </span>
+          </button>
+        </div>
+
+        {project.evaluationRuns?.length > 0 && (
+          <div className="text-xs font-mono text-slate-600 px-2">
+            {(() => {
+              const latest =
+                project.evaluationRuns[project.evaluationRuns.length - 1];
+              if (!latest) return null;
+              return latest.scorecard.overallScore !== null
+                ? `Latest Run (${latest.runId}): ${latest.scorecard.overallScore.toFixed(1)}%`
+                : `Latest Run (${latest.runId}): ${latest.status}`;
+            })()}
+          </div>
+        )}
+      </div>
+
       {/* Missing Documents Warning */}
       {parsedDocuments.length === 0 && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -886,21 +1131,33 @@ export function EvaluationPage({
         </div>
       )}
 
-      {runEvalMessage && (
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900 flex items-start justify-between gap-3">
-          <div className="flex items-start gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
-            <span>{runEvalMessage}</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => onNavigate('optimizer')}
-            className="px-3 py-1.5 rounded-lg bg-emerald-700 text-white text-xs font-medium hover:bg-emerald-800 whitespace-nowrap shrink-0"
-          >
-            View Optimizer Stage
-          </button>
-        </div>
-      )}
+      {activeViewTab === 'results' ? (
+        <EvaluationResultsPanel
+          project={project}
+          runs={project.evaluationRuns ?? []}
+          selectedRunId={selectedRunId}
+          onSelectRun={setSelectedRunId}
+          isRunning={runningEval}
+          activeCaseId={activeExecutingCaseId}
+          runError={runExecError}
+          canStartNewRun={canRunEvaluation}
+          agentName={savedAgentRecord?.definition.agentName || project.name}
+          agentVersion={savedAgentRecord?.version ?? null}
+          datasetVersion={savedEvalVer}
+          totalDatasetTests={workingCases.length}
+          onStartNewRun={() => void handleStartNewEvaluationRun()}
+          onResumeRun={(runId) => void handleResumeEvaluationRun(runId)}
+          onPauseRun={(runId) => void handlePauseEvaluationRun(runId)}
+          onRetryTestCase={(runId, testCaseId) =>
+            void handleRetryTestCase(runId, testCaseId)
+          }
+          onSkipTestCase={(runId, testCaseId) =>
+            void handleSkipTestCase(runId, testCaseId)
+          }
+          onNavigate={onNavigate}
+        />
+      ) : (
+        <>
 
       {/* Empty State before initial generation */}
       {workingCases.length === 0 ? (
@@ -1623,6 +1880,8 @@ export function EvaluationPage({
               })
             )}
           </div>
+        </>
+      )}
         </>
       )}
 

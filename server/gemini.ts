@@ -1,4 +1,9 @@
-import { GoogleGenAI } from '@google/genai';
+import {
+  type Content,
+  type FunctionDeclaration,
+  type GenerateContentResponse,
+  GoogleGenAI,
+} from '@google/genai';
 
 let cachedClient: GoogleGenAI | null = null;
 
@@ -68,6 +73,61 @@ export function formatGeminiError(error: unknown, fallbackMessage: string): Erro
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function generateContentWithRetry(params: {
+  contents: string | Content[];
+  systemInstruction: string;
+  functionDeclarations?: FunctionDeclaration[];
+}): Promise<GenerateContentResponse> {
+  const ai = getGeminiClient();
+  const attempts: Array<{ model: string; delayMs: number }> = [
+    { model: PRIMARY_MODEL, delayMs: 0 },
+    { model: PRIMARY_MODEL, delayMs: 2000 },
+    { model: SECONDARY_MODEL, delayMs: 1000 },
+    { model: PRIMARY_MODEL, delayMs: 3000 },
+  ];
+
+  let firstTransientError: unknown;
+  let lastError: unknown;
+
+  for (const attempt of attempts) {
+    if (attempt.delayMs > 0) {
+      await sleep(attempt.delayMs);
+    }
+    try {
+      const response = await ai.models.generateContent({
+        model: attempt.model,
+        contents: params.contents,
+        config: {
+          systemInstruction: params.systemInstruction,
+          ...(params.functionDeclarations && params.functionDeclarations.length > 0
+            ? {
+                tools: [{ functionDeclarations: params.functionDeclarations }],
+              }
+            : {}),
+        },
+      });
+      return response;
+    } catch (error) {
+      lastError = error;
+      if (!firstTransientError && isTransientGeminiError(error)) {
+        firstTransientError = error;
+      }
+      console.warn(
+        `[ForgeAI] Gemini attempt failed (${attempt.model}):`,
+        summarizeGeminiError(error)
+      );
+      if (!isTransientGeminiError(error)) {
+        throw formatGeminiError(error, 'Gemini request failed.');
+      }
+    }
+  }
+
+  throw formatGeminiError(
+    firstTransientError ?? lastError,
+    'Gemini request failed after retries.'
+  );
 }
 
 export async function generateStructuredJson(

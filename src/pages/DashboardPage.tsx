@@ -241,7 +241,12 @@ export function DashboardPage({
                         {project.documentCount} ({formatBytes(project.totalDocumentBytes)})
                       </td>
                       <td className="py-3.5 px-4 text-slate-700 whitespace-nowrap">
-                        {formatStageLabel(project.stage)}
+                        <span>{formatStageLabel(project.stage)}</span>
+                        {project.latestEvaluationRunScore !== null && (
+                          <span className="ml-2 font-mono text-xs font-semibold text-[#1E3A8A]">
+                            ({project.latestEvaluationRunScore.toFixed(1)}%)
+                          </span>
+                        )}
                       </td>
                       <td className="py-3.5 px-4 text-xs font-mono tabular-nums text-slate-500 whitespace-nowrap">
                         {formatDateTime(project.updatedAt)}
@@ -313,7 +318,7 @@ export function DashboardPage({
           ForgeAI Workflow Stages
         </h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Stages 1–4 (Create Agent, Requirements &amp; Groundability Guard, Agent Builder, and Evaluation Generator) are active.
+          Stages 1–4 (Create Agent, Requirements &amp; Groundability Guard, Agent Builder, and Evaluation Runner &amp; AI Judge) are active.
         </p>
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
@@ -357,7 +362,7 @@ export function DashboardPage({
           >
             <p className="font-semibold text-[#1E3A8A]">04. Evaluation (Active)</p>
             <p className="mt-1 text-slate-600">
-              Generate, edit, validate, and version 20+ grounded test cases.
+              Generate, run, and independently judge 20+ grounded test cases.
             </p>
           </button>
         </div>

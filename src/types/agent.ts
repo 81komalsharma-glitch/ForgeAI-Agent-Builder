@@ -243,6 +243,143 @@ export interface EvaluationPromptTemplateMeta {
   template: string;
 }
 
+export interface RetrievedChunkRecord {
+  chunkId: string;
+  documentName: string;
+  score: number;
+  snippet: string;
+  charStart: number;
+  charEnd: number;
+}
+
+export interface ExecutedToolRecord {
+  toolId: string;
+  toolName: string;
+  input: Record<string, unknown>;
+  output: unknown;
+  status: 'success' | 'error';
+  errorMessage?: string;
+}
+
+export interface DeterministicJudgeChecks {
+  detectedRefusal: boolean;
+  refusalMatchPassed: boolean;
+  expectedFactsTotal: number;
+  expectedFactsMatched: string[];
+  expectedFactsMissing: string[];
+  factCoverageRatio: number;
+  citedSourcesInAnswer: string[];
+  expectedSourceMatched: boolean | null;
+  notes: string[];
+}
+
+export interface JudgeScoreBreakdown {
+  groundingScore: number;
+  groundingExplanation: string;
+  correctnessScore: number;
+  correctnessExplanation: string;
+  refusalScore: number | null;
+  refusalApplicable: boolean;
+  refusalExplanation: string;
+  supportingEvidence: string;
+  failureReasons: string[];
+  deterministicOverridesApplied: string[];
+}
+
+export type EvaluationTestRunStatus = 'passed' | 'failed' | 'error' | 'skipped';
+
+export interface EvaluationTestCaseResult {
+  testCaseId: string;
+  question: string;
+  category: EvaluationCategory;
+  difficulty: EvaluationDifficulty;
+  expectedBehavior: string;
+  expectedKeyFacts: string[];
+  expectedSourceDocument: string | null;
+  expectedSupportingEvidence: string;
+  expectedRefusal: boolean;
+  status: EvaluationTestRunStatus;
+  actualAnswer: string;
+  retrievedEvidence: RetrievedChunkRecord[];
+  sourcesRetrieved: string[];
+  toolsUsed: ExecutedToolRecord[];
+  deterministicChecks: DeterministicJudgeChecks;
+  judge: JudgeScoreBreakdown | null;
+  failureReason: string;
+  errorMessage?: string;
+  executedAt: string;
+  durationMs: number;
+}
+
+export interface EvaluationCategoryScoreSummary {
+  category: EvaluationCategory;
+  total: number;
+  completed: number;
+  passed: number;
+  failed: number;
+  errors: number;
+  skipped: number;
+  passRatePercent: number | null;
+  avgGroundingPercent: number | null;
+  avgCorrectnessPercent: number | null;
+  avgRefusalPercent: number | null;
+}
+
+export interface EvaluationScorecard {
+  overallScore: number | null;
+  groundingScore: number | null;
+  correctnessScore: number | null;
+  refusalQualityScore: number | null;
+  refusalScoreStatus: 'available' | 'unavailable';
+  weightsUsed: {
+    grounding: number;
+    correctness: number;
+    refusal: number;
+  };
+  formulaText: string;
+  groundingFormulaText: string;
+  correctnessFormulaText: string;
+  refusalFormulaText: string;
+  counts: {
+    totalTests: number;
+    evaluatedTests: number;
+    passedTests: number;
+    failedTests: number;
+    errorTests: number;
+    skippedTests: number;
+    pendingTests: number;
+    groundingTestsUsed: number;
+    correctnessTestsUsed: number;
+    refusalTestsUsed: number;
+  };
+  byCategory: Record<EvaluationCategory, EvaluationCategoryScoreSummary>;
+}
+
+export type EvaluationRunStatus =
+  | 'running'
+  | 'paused'
+  | 'completed'
+  | 'completed_with_errors'
+  | 'failed';
+
+export interface EvaluationRunRecord {
+  runId: string;
+  projectId: string;
+  agentName: string;
+  agentVersion: number;
+  datasetVersion: number;
+  status: EvaluationRunStatus;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  currentTestCaseId: string | null;
+  totalTests: number;
+  testCasesSnapshot: EvaluationTestCase[];
+  results: EvaluationTestCaseResult[];
+  scorecard: EvaluationScorecard;
+  runErrors: string[];
+}
+
 export interface StoredDocument {
   id: string;
   projectId: string;
@@ -278,6 +415,7 @@ export interface AgentProject {
   requirements: AgentRequirements | null;
   agentConfig: AgentBuilderState | null;
   evaluation: EvaluationState | null;
+  evaluationRuns: EvaluationRunRecord[];
   optimization: null;
   report: null;
 }
@@ -303,6 +441,9 @@ export interface ProjectSummary {
   evaluationSavedVersion: number | null;
   evaluationValid: boolean;
   evaluationTestCaseCount: number;
+  evaluationRunCount: number;
+  latestEvaluationRunScore: number | null;
+  latestEvaluationRunStatus: EvaluationRunStatus | null;
 }
 
 export interface HealthStatus {

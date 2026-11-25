@@ -4,7 +4,9 @@ import type {
   AgentSectionKey,
   AgentValidationResult,
   EvaluationPromptTemplateMeta,
+  EvaluationRunRecord,
   EvaluationTestCase,
+  EvaluationTestCaseResult,
   EvaluationValidationResult,
   HealthStatus,
   ProjectSummary,
@@ -404,6 +406,86 @@ export async function saveEvaluationDataset(
   return handleResponse<{
     project: AgentProject;
     validation: EvaluationValidationResult;
+  }>(res);
+}
+
+export async function createEvaluationRun(projectId: string): Promise<{
+  project: AgentProject;
+  run: EvaluationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/runs`,
+    { method: 'POST' }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    run: EvaluationRunRecord;
+  }>(res);
+}
+
+export async function executeEvaluationRunStep(
+  projectId: string,
+  runId: string,
+  testCaseId?: string
+): Promise<{
+  project: AgentProject;
+  run: EvaluationRunRecord;
+  executedResult: EvaluationTestCaseResult | null;
+  done: boolean;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/runs/${encodeURIComponent(runId)}/step`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(testCaseId ? { testCaseId } : {}),
+    }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    run: EvaluationRunRecord;
+    executedResult: EvaluationTestCaseResult | null;
+    done: boolean;
+  }>(res);
+}
+
+export async function pauseEvaluationRun(
+  projectId: string,
+  runId: string
+): Promise<{
+  project: AgentProject;
+  run: EvaluationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/runs/${encodeURIComponent(runId)}/pause`,
+    { method: 'POST' }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    run: EvaluationRunRecord;
+  }>(res);
+}
+
+export async function skipEvaluationTestCase(
+  projectId: string,
+  runId: string,
+  testCaseId?: string,
+  reason?: string
+): Promise<{
+  project: AgentProject;
+  run: EvaluationRunRecord;
+}> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/evaluation/runs/${encodeURIComponent(runId)}/skip`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testCaseId, reason }),
+    }
+  );
+  return handleResponse<{
+    project: AgentProject;
+    run: EvaluationRunRecord;
   }>(res);
 }
 
