@@ -1,4 +1,21 @@
-import type { AgentProject, HealthStatus, ProjectSummary, StoredDocument } from '../types/agent';
+import type {
+  AgentDefinition,
+  AgentProject,
+  AgentSectionKey,
+  AgentValidationResult,
+  HealthStatus,
+  ProjectSummary,
+  StoredDocument,
+} from '../types/agent';
+
+export class ApiValidationError extends Error {
+  validation?: AgentValidationResult;
+  constructor(message: string, validation?: AgentValidationResult) {
+    super(message);
+    this.name = 'ApiValidationError';
+    this.validation = validation;
+  }
+}
 
 export type UploadLifecycleStage = 'uploading' | 'processing';
 
@@ -13,6 +30,9 @@ async function handleResponse<T>(response: Response): Promise<T> {
       typeof data?.error === 'string' && data.error.length > 0
         ? data.error
         : `Request failed with status ${response.status}`;
+    if (data?.validation) {
+      throw new ApiValidationError(message, data.validation as AgentValidationResult);
+    }
     throw new Error(message);
   }
   return data as T;
@@ -221,4 +241,68 @@ export async function approveRequirements(projectId: string): Promise<AgentProje
   );
   const data = await handleResponse<{ project: AgentProject }>(res);
   return data.project;
+}
+
+export async function generateAgentDefinition(projectId: string): Promise<AgentProject> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/agent/generate`,
+    { method: 'POST' }
+  );
+  const data = await handleResponse<{ project: AgentProject }>(res);
+  return data.project;
+}
+
+export async function regenerateAgentSection(
+  projectId: string,
+  section: AgentSectionKey,
+  currentDefinition: AgentDefinition
+): Promise<{ definition: AgentDefinition; validation: AgentValidationResult }> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/agent/regenerate-section`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ section, currentDefinition }),
+    }
+  );
+  return handleResponse<{ definition: AgentDefinition; validation: AgentValidationResult }>(
+    res
+  );
+}
+
+export async function validateAgentDefinition(
+  projectId: string,
+  definition: unknown
+): Promise<{ definition: AgentDefinition; validation: AgentValidationResult }> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/agent/validate`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ definition }),
+    }
+  );
+  return handleResponse<{ definition: AgentDefinition; validation: AgentValidationResult }>(
+    res
+  );
+}
+
+export async function saveAgentDefinition(
+  projectId: string,
+  payload: {
+    definition: AgentDefinition;
+    baseVersion: number | null;
+    source: 'generated' | 'section_regenerated' | 'manual_edit';
+    notes?: string;
+  }
+): Promise<{ project: AgentProject; validation: AgentValidationResult }> {
+  const res = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/agent/save`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }
+  );
+  return handleResponse<{ project: AgentProject; validation: AgentValidationResult }>(res);
 }

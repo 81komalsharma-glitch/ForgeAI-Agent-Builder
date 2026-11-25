@@ -83,6 +83,100 @@ export interface AgentRequirements {
   updatedAt: string;
 }
 
+export type AgentSectionKey =
+  | 'systemPrompt'
+  | 'knowledgeConfig'
+  | 'tools'
+  | 'outputContract';
+
+export interface AgentSystemPrompt {
+  agentRoleAndIdentity: string;
+  mainObjective: string;
+  scopeAndResponsibilities: string[];
+  knowledgeDocumentInstructions: string;
+  answeringRules: string[];
+  mustAnswerTopics: string[];
+  mustRefuseTopics: string[];
+  missingInformationHandling: string;
+  groundingAndCitationRules: string;
+  responseToneAndStyle: string;
+}
+
+export interface AgentKnowledgeConfig {
+  supportedDocumentTypes: string[];
+  chunkingStrategy: string;
+  chunkSize: number;
+  chunkOverlap: number;
+  retrievalMethod: string;
+  topK: number;
+  similarityThreshold: number;
+  sourceCitationRequirements: string;
+  rationale: string;
+  implementationStatus: 'declarative_config_only';
+  implementationNote: string;
+}
+
+export interface AgentToolDefinition {
+  id: string;
+  toolName: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema: Record<string, unknown>;
+  whenToUse: string;
+  whenNotToUse: string;
+  selected: boolean;
+  selectionReason: string;
+  requiresApiKey: boolean;
+  implementationStatus: 'specification_only';
+  implementationNote: string;
+}
+
+export interface AgentOutputContract {
+  requiredResponseStructure: string[];
+  expectedOutputFormat: string;
+  citationFormat: string;
+  refusalFormat: string;
+  errorHandlingRules: string[];
+}
+
+export interface AgentDefinition {
+  agentName: string;
+  systemPrompt: AgentSystemPrompt;
+  knowledgeConfig: AgentKnowledgeConfig;
+  tools: AgentToolDefinition[];
+  outputContract: AgentOutputContract;
+}
+
+export interface AgentValidationIssue {
+  field: string;
+  severity: 'error' | 'warning';
+  message: string;
+}
+
+export interface AgentValidationResult {
+  valid: boolean;
+  errors: AgentValidationIssue[];
+  warnings: AgentValidationIssue[];
+  checkedAt: string;
+}
+
+export interface AgentVersionRecord {
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  source: 'generated' | 'section_regenerated' | 'manual_edit';
+  notes: string;
+  definition: AgentDefinition;
+  validation: AgentValidationResult;
+}
+
+export interface AgentBuilderState {
+  currentVersion: number;
+  versions: AgentVersionRecord[];
+  savedVersion: number | null;
+  savedAt: string | null;
+}
+
 export interface StoredDocument {
   id: string;
   projectId: string;
@@ -116,7 +210,7 @@ export interface AgentProject {
   documents: StoredDocument[];
   intakeInterview: IntakeInterviewState | null;
   requirements: AgentRequirements | null;
-  agentConfig: null;
+  agentConfig: AgentBuilderState | null;
   evaluation: null;
   optimization: null;
   report: null;
@@ -136,6 +230,9 @@ export interface ProjectSummary {
   totalDocumentBytes: number;
   hasRequirements: boolean;
   requirementsApproved: boolean;
+  hasAgentConfig: boolean;
+  agentSavedVersion: number | null;
+  agentValid: boolean;
 }
 
 export interface HealthStatus {

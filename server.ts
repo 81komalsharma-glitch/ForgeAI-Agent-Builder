@@ -3,6 +3,12 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
+import {
+  coerceAgentDefinitionInput,
+  generateFullAgentDefinition,
+  regenerateAgentSection,
+  validateAgentDefinition,
+} from './server/agentBuilder.ts';
 import { detectAllowedFileType } from './server/documents.ts';
 import { isGeminiConfigured } from './server/gemini.ts';
 import {
@@ -21,10 +27,12 @@ import {
   listProjects,
   MAX_FILES_PER_PROJECT,
   removeDocumentFromProject,
+  saveProjectAgentConfig,
   saveProjectIntakeInterview,
   saveProjectRequirements,
   type IncomingUploadedFile,
 } from './server/storage.ts';
+import type { AgentSectionKey, AgentVersionRecord } from './server/types.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024; // 10 MB per document
@@ -389,6 +397,243 @@ async function startServer(): Promise<void> {
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Failed to approve requirements.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Generate complete declarative Agent Definition (creates a new version, preserving history)
+  app.post('/api/projects/:id/agent/generate', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!project.requirements?.approved) {
+        res.status(400).json({
+          error: 'Requirements must be approved before generating an agent definition.',
+        });
+        return;
+      }
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      const definition = await generateFullAgentDefinition(project, extractedDocs);
+      const validation = validateAgentDefinition(project, definition);
+
+      const existingVersions = project.agentConfig?.versions ?? [];
+      const maxVersion = existingVersions.reduce(
+        (max, item) => Math.max(max, item.version),
+        0
+      );
+      const nextVersion = maxVersion + 1;
+      const now = new Date().toISOString();
+
+      const newRecord: AgentVersionRecord = {
+        version: nextVersion,
+        createdAt: now,
+        updatedAt: now,
+        source: 'generated',
+        notes: `Generated v${nextVersion} from approved requirements.`,
+        definition,
+        validation,
+      };
+
+      const updated = await saveProjectAgentConfig(project.id, {
+        currentVersion: nextVersion,
+        versions: [...existingVersions, newRecord],
+        savedVersion: project.agentConfig?.savedVersion ?? null,
+        savedAt: project.agentConfig?.savedAt ?? null,
+      });
+
+      res.json({ project: updated });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to generate agent definition.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Regenerate a single section without overwriting other sections
+  app.post('/api/projects/:id/agent/regenerate-section', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!project.requirements?.approved) {
+        res.status(400).json({
+          error: 'Requirements must be approved before regenerating an agent section.',
+        });
+        return;
+      }
+      if (!isGeminiConfigured()) {
+        res.status(503).json({
+          error: 'GEMINI_API_KEY is not configured on the server. Add it in Settings > Secrets.',
+        });
+        return;
+      }
+
+      const section = req.body?.section as AgentSectionKey;
+      const validSections: AgentSectionKey[] = [
+        'systemPrompt',
+        'knowledgeConfig',
+        'tools',
+        'outputContract',
+      ];
+      if (!validSections.includes(section)) {
+        res.status(400).json({ error: 'Invalid section name for regeneration.' });
+        return;
+      }
+
+      const currentVersionObj = project.agentConfig?.versions.find(
+        (v) => v.version === project.agentConfig?.currentVersion
+      );
+      const rawCurrent = req.body?.currentDefinition ?? currentVersionObj?.definition;
+      if (!rawCurrent) {
+        res.status(400).json({
+          error: 'Generate an initial agent definition before regenerating a section.',
+        });
+        return;
+      }
+
+      const baseDefinition = coerceAgentDefinitionInput(rawCurrent, project);
+      const extractedDocs = await getProjectExtractedDocuments(project.id);
+      const updatedDefinition = await regenerateAgentSection(
+        project,
+        extractedDocs,
+        baseDefinition,
+        section
+      );
+      const validation = validateAgentDefinition(project, updatedDefinition);
+
+      res.json({
+        definition: updatedDefinition,
+        validation,
+      });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to regenerate agent section.';
+      const statusCode = message.includes('temporarily unavailable') ? 503 : 500;
+      res.status(statusCode).json({ error: message });
+    }
+  });
+
+  // Validate an agent definition on the backend
+  app.post('/api/projects/:id/agent/validate', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+
+      const definition = coerceAgentDefinitionInput(req.body?.definition, project);
+      const validation = validateAgentDefinition(project, definition);
+      res.json({ definition, validation });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Invalid agent definition JSON.';
+      res.status(400).json({ error: message });
+    }
+  });
+
+  // Save and version a validated agent definition
+  app.put('/api/projects/:id/agent/save', async (req, res) => {
+    try {
+      const project = await getProjectById(req.params.id);
+      if (!project) {
+        res.status(404).json({ error: 'Project not found.' });
+        return;
+      }
+      if (!project.requirements?.approved) {
+        res.status(400).json({
+          error: 'Requirements must be approved before saving an agent definition.',
+        });
+        return;
+      }
+
+      const definition = coerceAgentDefinitionInput(req.body?.definition, project);
+      const validation = validateAgentDefinition(project, definition);
+      if (!validation.valid) {
+        res.status(400).json({
+          error: validation.errors[0]?.message || 'Agent definition failed validation.',
+          validation,
+        });
+        return;
+      }
+
+      const existingVersions = project.agentConfig?.versions ?? [];
+      const baseVersion =
+        typeof req.body?.baseVersion === 'number' ? req.body.baseVersion : null;
+      const source =
+        req.body?.source === 'section_regenerated' || req.body?.source === 'generated'
+          ? req.body.source
+          : 'manual_edit';
+
+      const now = new Date().toISOString();
+      const matchingExisting =
+        baseVersion !== null
+          ? existingVersions.find((v) => v.version === baseVersion)
+          : undefined;
+
+      const isUnchangedFromBase =
+        Boolean(matchingExisting) &&
+        JSON.stringify(matchingExisting?.definition) === JSON.stringify(definition);
+
+      let nextVersions: AgentVersionRecord[];
+      let savedVersionNumber: number;
+
+      if (isUnchangedFromBase && matchingExisting) {
+        savedVersionNumber = matchingExisting.version;
+        nextVersions = existingVersions.map((v) =>
+          v.version === matchingExisting.version
+            ? { ...v, updatedAt: now, validation }
+            : v
+        );
+      } else {
+        const maxVersion = existingVersions.reduce(
+          (max, item) => Math.max(max, item.version),
+          0
+        );
+        savedVersionNumber = maxVersion + 1;
+        const newRecord: AgentVersionRecord = {
+          version: savedVersionNumber,
+          createdAt: now,
+          updatedAt: now,
+          source,
+          notes:
+            typeof req.body?.notes === 'string' && req.body.notes.trim().length > 0
+              ? req.body.notes.trim()
+              : `Saved v${savedVersionNumber}.`,
+          definition,
+          validation,
+        };
+        nextVersions = [...existingVersions, newRecord];
+      }
+
+      const updated = await saveProjectAgentConfig(
+        project.id,
+        {
+          currentVersion: savedVersionNumber,
+          versions: nextVersions,
+          savedVersion: savedVersionNumber,
+          savedAt: now,
+        },
+        'agent_built'
+      );
+
+      res.json({ project: updated, validation });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to save agent definition.';
       res.status(400).json({ error: message });
     }
   });

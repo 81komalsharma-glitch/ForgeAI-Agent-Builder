@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import path from 'path';
 import { parseUploadedDocument } from './documents.ts';
 import type {
+  AgentBuilderState,
   AgentProject,
   AgentRequirements,
   IntakeInterviewState,
@@ -56,12 +57,19 @@ function normalizeProjectRecord(raw: AgentProject): AgentProject {
     responseTone: raw.responseTone ?? '',
     intakeInterview: raw.intakeInterview ?? null,
     requirements: raw.requirements ?? null,
+    agentConfig: raw.agentConfig ?? null,
   };
 }
 
 function toProjectSummary(rawProject: AgentProject): ProjectSummary {
   const project = normalizeProjectRecord(rawProject);
   const totalDocumentBytes = project.documents.reduce((acc, doc) => acc + doc.sizeBytes, 0);
+  const savedVer = project.agentConfig?.savedVersion ?? null;
+  const savedRecord =
+    savedVer !== null
+      ? project.agentConfig?.versions.find((v) => v.version === savedVer) ?? null
+      : null;
+
   return {
     id: project.id,
     name: project.name,
@@ -76,6 +84,9 @@ function toProjectSummary(rawProject: AgentProject): ProjectSummary {
     totalDocumentBytes,
     hasRequirements: project.requirements !== null,
     requirementsApproved: Boolean(project.requirements?.approved),
+    hasAgentConfig: Boolean(project.agentConfig && project.agentConfig.versions.length > 0),
+    agentSavedVersion: savedVer,
+    agentValid: Boolean(savedRecord?.validation.valid),
   };
 }
 
@@ -273,6 +284,23 @@ export async function saveProjectRequirements(
 
   project.requirements = requirements;
   project.stage = stage;
+  project.updatedAt = new Date().toISOString();
+  await saveProjectRecord(project);
+  return project;
+}
+
+export async function saveProjectAgentConfig(
+  projectId: string,
+  agentConfig: AgentBuilderState,
+  stage?: PipelineStage
+): Promise<AgentProject | null> {
+  const project = await getProjectById(projectId);
+  if (!project) return null;
+
+  project.agentConfig = agentConfig;
+  if (stage) {
+    project.stage = stage;
+  }
   project.updatedAt = new Date().toISOString();
   await saveProjectRecord(project);
   return project;

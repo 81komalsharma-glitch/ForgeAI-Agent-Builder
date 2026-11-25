@@ -3,6 +3,7 @@ import { ModulePendingView } from './components/common/ModulePendingView';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
 import { ProjectDetailModal } from './components/projects/ProjectDetailModal';
+import { AgentBuilderPage } from './pages/AgentBuilderPage';
 import { CreateAgentPage } from './pages/CreateAgentPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { RequirementsPage } from './pages/RequirementsPage';
@@ -158,6 +159,12 @@ export default function App() {
             />
           ) : activeSection === 'requirements' ? (
             <RequirementsPage
+              selectedProjectId={selectedProjectId}
+              onNavigate={handleSelectSection}
+              onProjectsChanged={loadProjects}
+            />
+          ) : activeSection === 'builder' ? (
+            <AgentBuilderPage
               selectedProjectId={selectedProjectId}
               onNavigate={handleSelectSection}
               onProjectsChanged={loadProjects}

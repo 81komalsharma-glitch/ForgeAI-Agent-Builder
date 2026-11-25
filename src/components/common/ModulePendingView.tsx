@@ -10,23 +10,15 @@ interface ModuleMetadata {
 }
 
 const MODULE_INFO: Record<
-  Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements'>,
+  Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements' | 'builder'>,
   ModuleMetadata
 > = {
-  builder: {
-    title: 'Agent Builder',
-    stepNumber: 'Stage 03',
-    purpose:
-      'Generate the agent system prompt, tool definitions, and document retrieval configuration tailored to the approved requirements.',
-    plannedInputs: 'Approved requirements specification and document index.',
-    plannedOutputs: 'Versioned agent configuration JSON (system prompt, tools, retrieval settings).',
-  },
   evaluation: {
     title: 'Evaluation',
     stepNumber: 'Stage 04',
     purpose:
       'Automatically generate domain-specific test cases and run the configured agent against them to measure accuracy, grounding, and constraint adherence.',
-    plannedInputs: 'Agent configuration and requirements test criteria.',
+    plannedInputs: 'Saved, validated agent configuration and requirements test criteria.',
     plannedOutputs: 'Structured test cases and real pass/fail evaluation results.',
   },
   optimizer: {
@@ -56,7 +48,7 @@ const MODULE_INFO: Record<
 };
 
 interface ModulePendingViewProps {
-  section: Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements'>;
+  section: Exclude<NavSectionId, 'dashboard' | 'create' | 'requirements' | 'builder'>;
   selectedProject: ProjectSummary | null;
   onNavigate: (section: NavSectionId) => void;
 }
@@ -67,9 +59,12 @@ export function ModulePendingView({
   onNavigate,
 }: ModulePendingViewProps) {
   const info = MODULE_INFO[section];
-  const needsRequirementsApproval =
-    section === 'builder' &&
-    (!selectedProject || !selectedProject.requirementsApproved);
+  const needsSavedAgentDefinition =
+    section === 'evaluation' &&
+    (!selectedProject ||
+      !selectedProject.requirementsApproved ||
+      selectedProject.agentSavedVersion === null ||
+      !selectedProject.agentValid);
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -85,25 +80,39 @@ export function ModulePendingView({
           {info.purpose}
         </p>
 
-        {needsRequirementsApproval ? (
+        {needsSavedAgentDefinition ? (
           <div className="mt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
             <div className="flex items-start gap-3">
               <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" aria-hidden="true" />
               <div className="text-xs text-amber-900 leading-relaxed">
                 <span className="font-semibold">
-                  Requirements approval required.
+                  Valid saved agent definition required.
                 </span>{' '}
-                {selectedProject
-                  ? 'Generate and approve the structured requirements for this project before proceeding to Agent Builder.'
-                  : 'Create an agent project and approve its requirements before proceeding to Agent Builder.'}
+                {!selectedProject
+                  ? 'Create a project, approve its requirements, and save a valid agent definition in Agent Builder before continuing to Evaluation.'
+                  : !selectedProject.requirementsApproved
+                    ? 'Approve the project requirements first, then generate and save a valid agent definition in Agent Builder.'
+                    : 'Generate, validate, and click Save Definition in Agent Builder before continuing to Evaluation.'}
               </div>
             </div>
             <button
               type="button"
-              onClick={() => onNavigate(selectedProject ? 'requirements' : 'create')}
+              onClick={() =>
+                onNavigate(
+                  !selectedProject
+                    ? 'create'
+                    : !selectedProject.requirementsApproved
+                      ? 'requirements'
+                      : 'builder'
+                )
+              }
               className="px-3.5 py-2 rounded-lg bg-[#1E3A8A] text-white text-xs font-medium hover:bg-[#1E40AF] transition-colors whitespace-nowrap shrink-0"
             >
-              {selectedProject ? 'Go to Requirements' : 'Create Agent'}
+              {!selectedProject
+                ? 'Create Agent'
+                : !selectedProject.requirementsApproved
+                  ? 'Go to Requirements'
+                  : 'Go to Agent Builder'}
             </button>
           </div>
         ) : (
@@ -111,8 +120,8 @@ export function ModulePendingView({
             <Info className="w-4 h-4 text-[#1E3A8A] shrink-0 mt-0.5" aria-hidden="true" />
             <div className="text-xs text-slate-700 leading-relaxed">
               <span className="font-semibold text-slate-900">
-                {section === 'builder' && selectedProject?.requirementsApproved
-                  ? 'Requirements approved — Agent Builder module is next.'
+                {section === 'evaluation' && selectedProject?.agentSavedVersion !== null
+                  ? `Agent definition v${selectedProject?.agentSavedVersion} saved and valid — Evaluation module is next.`
                   : 'Module not yet implemented.'}
               </span>{' '}
               This stage will be implemented in the next step. No simulated prompts, scores, or test results are displayed here.

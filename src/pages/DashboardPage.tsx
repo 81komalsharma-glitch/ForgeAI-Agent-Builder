@@ -313,7 +313,7 @@ export function DashboardPage({
           ForgeAI Workflow Stages
         </h2>
         <p className="text-xs text-slate-500 mt-0.5">
-          Stages 1 and 2 (Create Agent, Document Processing, Intake Interviewer, and Requirements &amp; Groundability Guard) are active.
+          Stages 1–3 (Create Agent, Requirements &amp; Groundability Guard, and Agent Builder) are active.
         </p>
 
         <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
@@ -342,22 +342,22 @@ export function DashboardPage({
           <button
             type="button"
             onClick={() => onNavigate('builder')}
-            className="text-left p-3.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:border-slate-300 transition-colors"
+            className="text-left p-3.5 rounded-lg border border-slate-200 hover:border-[#1E3A8A] transition-colors"
           >
-            <p className="font-semibold text-slate-800">03. Builder &amp; Evaluation</p>
-            <p className="mt-1 text-slate-500">
-              Pending implementation: generate agent prompt/tools and run test cases.
+            <p className="font-semibold text-[#1E3A8A]">03. Agent Builder (Active)</p>
+            <p className="mt-1 text-slate-600">
+              Generate, edit, validate, and version declarative agent definitions.
             </p>
           </button>
 
           <button
             type="button"
-            onClick={() => onNavigate('reports')}
+            onClick={() => onNavigate('evaluation')}
             className="text-left p-3.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:border-slate-300 transition-colors"
           >
-            <p className="font-semibold text-slate-800">04. Reports &amp; Agent Chat</p>
+            <p className="font-semibold text-slate-800">04. Evaluation &amp; Chat</p>
             <p className="mt-1 text-slate-500">
-              Pending implementation: final quality summary and live test chat.
+              Pending implementation: run test cases, optimize prompts, and test chat.
             </p>
           </button>
         </div>
